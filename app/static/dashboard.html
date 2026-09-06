@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DealRadar — vastgoed opportuniteiten</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #171b23; --panel2: #1e242e; --border: #2a3140;
+    --text: #e8eaf0; --muted: #8b93a5; --accent: #4ade80; --accent2: #38bdf8;
+    --warn: #fbbf24; --hot: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 20px 28px; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 20px; font-weight: 600; letter-spacing: .3px; }
+  header .logo { width: 34px; height: 34px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: flex; align-items: center; justify-content: center; font-weight: 700; color: #0b0e13; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 13px; }
+  button:hover { border-color: var(--accent2); }
+  .wrap { padding: 24px 28px; max-width: 1400px; margin: 0 auto; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 22px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
+  .card .v { font-size: 26px; font-weight: 650; margin-top: 4px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }
+  select, input[type=text] { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+  .filters label { color: var(--muted); font-size: 13px; }
+  input[type=range] { accent-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  thead th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--panel2); position: sticky; top: 0; }
+  tbody td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 14px; }
+  tbody tr:hover { background: var(--panel2); }
+  .score { display: inline-block; min-width: 44px; text-align: center; padding: 4px 8px; border-radius: 8px; font-weight: 700; }
+  .s-hot { background: rgba(248,113,113,.15); color: var(--hot); }
+  .s-warm { background: rgba(251,191,36,.15); color: var(--warn); }
+  .s-cool { background: rgba(74,222,128,.12); color: var(--accent); }
+  .chip { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin: 1px 2px 1px 0; }
+  .chip.on { border-color: var(--accent2); color: var(--accent2); }
+  .badge-src { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+  .badge-src.auction { color: var(--warn); border-color: var(--warn); }
+  .badge-demo { font-size: 10px; padding: 1px 6px; border-radius: 5px; background: rgba(56,189,248,.12); color: var(--accent2); margin-left: 6px; }
+  .drop { color: var(--hot); font-size: 12px; font-weight: 600; }
+  a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  a:hover { color: var(--accent2); }
+  .label { display: inline-block; width: 24px; text-align: center; border-radius: 5px; font-size: 12px; font-weight: 700; padding: 2px 0; }
+  .lab-G, .lab-F { background: rgba(248,113,113,.2); color: var(--hot); }
+  .lab-E, .lab-D { background: rgba(251,191,36,.2); color: var(--warn); }
+  .lab-C, .lab-B, .lab-A { background: rgba(74,222,128,.15); color: var(--accent); }
+  .bd { color: var(--muted); font-size: 12px; margin-top: 3px; max-width: 420px; }
+  .muted { color: var(--muted); }
+  #srcstatus { margin-top: 18px; color: var(--muted); font-size: 12px; }
+  #srcstatus span { margin-right: 16px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  .ok { background: var(--accent); } .err { background: var(--hot); } .na { background: var(--muted); }
+  /* AI-taxatie */
+  .vx { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: var(--panel); margin-top: 12px; }
+  .vx-hero { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .vx-hero .amount { font-size: 28px; font-weight: 750; }
+  .vx-conf { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid currentColor; }
+  .vx-margin { font-weight: 700; font-size: 15px; margin-top: 4px; }
+  .vx-ctls { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 14px 0; }
+  .vx-ctl { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  .vx-ctl input[type=range] { width: 100%; }
+  .vx-ctl input[type=number], .vx-ctl select { width: 100%; }
+  .vx table { border: none; font-size: 12.5px; }
+  .vx tbody td { padding: 6px 8px; }
+  .vx thead th { padding: 6px 8px; position: static; }
+  .vx-income { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
+  .vx-income b { font-size: 15px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">DR</div>
+  <div>
+    <h1>DealRadar</h1>
+    <div class="sub">Data-gedreven sourcing — Funda + veilingplatforms, dagelijks ververst</div>
+  </div>
+  <div class="right">
+    <span id="lastupdate" class="muted" style="font-size:12px"></span>
+    <button onclick="toggleUitleg()">ℹ Hoe werkt de score?</button>
+    <button onclick="refresh()">↻ Nieuwe scrape</button>
+  </div>
+</header>
+
+<div id="uitleg" style="display:none; border-bottom:1px solid var(--border); background:var(--panel); padding:22px 28px;">
+  <div style="max-width:1400px; margin:0 auto;">
+    <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+      <strong style="font-size:16px">Flip-score: 0–100 punten</strong>
+      <span class="muted" style="font-size:13px">De score rangschikt waar je als eerste naar kijkt — een signaal, geen taxatie. De marge zit in de aankoop: hoe hoger de score, hoe groter de kans dat dit object onder marktwaarde te verwerven en met waardecreatie door te verkopen is.</span>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; font-size:13px;">
+      <div class="card"><b>Prijs/m² onder marktbenchmark</b> <span style="float:right;color:var(--accent)">tot 25 pt</span><div class="muted">≥30% korting = 25 · ≥20% = 18 · ≥10% = 10 · ≥5% = 5. Vergeleken met VERKOCHTE objecten in dezelfde wijk én hetzelfde grootte-segment (&lt;50 / 50–100 / &gt;100 m²); te weinig wijkdata → stadsniveau → actief aanbod. Goedkoop inkopen ís de marge.</div></div>
+      <div class="card"><b>Groot perceel</b> <span style="float:right;color:var(--accent)">tot 12 pt</span><div class="muted">Woning ≥80 m² op perceel ≥5× woonoppervlak = 12 · ≥3× = 8 · ≥2× = 4. Bijbouw-/uitbouwpotentie: vergunningvrij bouwen schaalt mee met het bebouwingsgebied.</div></div>
+      <div class="card"><b>Energielabel</b> <span style="float:right;color:var(--accent)">tot 15 pt</span><div class="muted">G = 15 · F = 12 · E = 9 · D = 5 · C = 2. Slecht label = renovatiekans + vaak gemotiveerde verkoper.</div></div>
+      <div class="card"><b>Verbouwkansen in tekst</b> <span style="float:right;color:var(--accent)">tot 20 pt</span><div class="muted">Casco (+8), verbouwkans (+5), ontwikkelkans (+4), dakopbouw (+4), uitbreiden (+3) — stapelbaar tot 20. Herkend uit de omschrijving.</div></div>
+      <div class="card"><b>Splitsbaar</b> <span style="float:right;color:var(--accent)">tot 15 pt</span><div class="muted">Splitsingsvergunning aanwezig = 15 · bouwkundig/kadastraal splitsbaar genoemd = 10. Splitsen is de grootste waardesprong.</div></div>
+      <div class="card"><b>Onderhoudsstaat</b> <span style="float:right;color:var(--accent)">tot 10 pt</span><div class="muted">Slecht = 10 · matig = 6. Uit de omschrijving gehaald ("achterstallig onderhoud", "opknapper").</div></div>
+      <div class="card"><b>Bouwjaar</b> <span style="float:right;color:var(--accent)">tot 10 pt</span><div class="muted">Vóór 1930 = 10 · vóór 1950 = 7 · vóór 1970 = 4. Oud = verbeterpotentieel.</div></div>
+      <div class="card"><b>Prijsverlagingen</b> <span style="float:right;color:var(--accent)">tot 10 pt</span><div class="muted">2x of vaker verlaagd = 10 · 1x = 6. Automatisch bijgehouden per dagelijkse scrape — hét signaal van een gemotiveerde verkoper.</div></div>
+      <div class="card"><b>Veiling</b> <span style="float:right;color:var(--accent)">8 pt</span><div class="muted">Executieveiling of openbare inschrijving = gedwongen/gemotiveerde verkoop, vaak onder marktprijs.</div></div>
+      <div class="card"><b>Geen erfpacht</b> <span style="float:right;color:var(--accent)">5 pt</span><div class="muted">Volle eigendom verkoopt makkelijker door en financiert eenvoudiger.</div></div>
+    </div>
+    <div class="muted" style="margin-top:12px; font-size:13px;">
+      Kleuren: <span class="score s-hot" style="font-size:12px">≥ 60</span> hot lead — direct bellen ·
+      <span class="score s-warm" style="font-size:12px">40–59</span> interessant — nader onderzoeken ·
+      <span class="score s-cool" style="font-size:12px">&lt; 40</span> monitoren.
+      Objecten met een <span class="badge-demo">demo</span>-badge zijn fictieve voorbeelddata om het model te tonen; echte objecten verschijnen na de eerste scrape.
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="cards">
+    <div class="card"><div class="k">Objecten in database</div><div class="v" id="c-total">–</div></div>
+    <div class="card"><div class="k">Hot leads (score ≥ 60)</div><div class="v" id="c-hot" style="color:var(--hot)">–</div></div>
+    <div class="card"><div class="k">Gemiddelde flip-score</div><div class="v" id="c-avg">–</div></div>
+    <div class="card"><div class="k">Steden</div><div class="v" id="c-cities">–</div></div>
+    <div class="card"><div class="k">Bronnen</div><div class="v" id="c-sources">–</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:18px;">
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <b style="white-space:nowrap;">🔎 Adres-analyse</b>
+      <input type="text" id="an-q" placeholder="Straat huisnummer plaats — of plak een Funda-link"
+             style="flex:1; min-width:280px;" onkeydown="if(event.key==='Enter')runAnalyse()">
+      <button onclick="runAnalyse()">Analyseer potentie</button>
+    </div>
+    <div id="an-result" style="display:none; margin-top:14px; font-size:14px;"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:18px;" id="top5-card">
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <b style="white-space:nowrap;">🏆 Top 5 — regio Eindhoven</b>
+      <select id="p-profile" onchange="onProfileChange()"></select>
+      <select id="p-rank" onchange="loadTop5()" title="Waarop rangschikken">
+        <option value="risk">🛡 risico-gecorrigeerd</option>
+        <option value="roi">📈 rendement (ROI)</option>
+        <option value="winst">💰 ruwe winst</option>
+      </select>
+      <button onclick="loadTop5()">Ververs</button>
+      <button onclick="toggleAannames()" style="opacity:.8;">Aannames &amp; filters ▾</button>
+      <button id="btn-purge" onclick="purgeDemo()" style="display:none; background:transparent; border:1px solid var(--hot); color:var(--hot);">🗑 Demo-data verwijderen</button>
+      <span class="muted" id="top5-meta" style="font-size:12px;"></span>
+    </div>
+    <div id="p-edit" style="display:none; margin-top:12px; padding:12px; border:1px solid var(--border); border-radius:10px;">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; font-size:13px;">
+        <label>Focus-verbouwbudget €/m²<input type="number" id="pp-focus_tier" step="100"></label>
+        <label>Uplift gerenoveerd (×stadsmediaan)<input type="number" id="pp-renov_uplift" step="0.01"></label>
+        <label>Appartement-premie (×woning)<input type="number" id="pp-app_premium" step="0.01"></label>
+        <label>Overdrachtsbelasting %<input type="number" id="pp-ovb_pct" step="0.1"></label>
+        <label>Splitsingskosten €<input type="number" id="pp-split_kosten" step="1000"></label>
+        <label>Huur €/m²/mnd<input type="number" id="pp-huur_m2" step="0.5"></label>
+        <label>Exploitatiekosten %<input type="number" id="pp-opex_pct" step="1"></label>
+        <label>Waardeband ± (0.06 = 6%)<input type="number" id="pp-waarde_band" step="0.01"></label>
+      </div>
+      <div style="margin-top:10px; font-size:13px;"><b>Filters</b> <span class="muted">(0 = geen limiet — welke objecten mogen meedoen in de Top 5)</span></div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; font-size:13px; margin-top:6px;">
+        <label>Min. woonoppervlak m²<input type="number" id="pp-min_area" step="5"></label>
+        <label>Max. woonoppervlak m²<input type="number" id="pp-max_area" step="5"></label>
+        <label>Min. vraagprijs €<input type="number" id="pp-min_price" step="10000"></label>
+        <label>Max. vraagprijs €<input type="number" id="pp-max_price" step="10000"></label>
+        <label>Max. aankoopprijs €/m²<input type="number" id="pp-max_price_m2" step="100"></label>
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <button onclick="saveProfile(false)">Opslaan in dit profiel</button>
+        <button onclick="saveProfile(true)" style="opacity:.8;">Opslaan als nieuw profiel…</button>
+        <span class="muted" style="font-size:12px;">Wekelijks bijstellen? Pas aan, sla op als bijv. "week 30" en vergelijk runs per profiel.</span>
+      </div>
+    </div>
+    <div id="top5-list" style="margin-top:12px;"><span class="muted">Laden…</span></div>
+  </div>
+
+  <div class="card" style="margin-bottom:18px;" id="bench-card">
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <b style="white-space:nowrap;">📊 Marktscorebord — €/m² verkocht per segment</b>
+      <select id="b-city" onchange="renderBenchmarks()"></select>
+      <button onclick="refreshSold()" style="opacity:.85;">↻ Ververs verkocht-data</button>
+      <span class="muted" style="font-size:12px;">klein &lt;50 m² · midden 50–100 m² · groot &gt;100 m² — p25 / <b>mediaan</b> / p75 (aantal). Benchmark = laatste vraagprijs van verkochte objecten.</span>
+    </div>
+    <div id="bench-body" style="margin-top:12px;"><span class="muted">Laden…</span></div>
+  </div>
+
+  <div class="filters">
+    <select id="f-city" onchange="load()"><option value="">Alle steden</option></select>
+    <select id="f-source" onchange="load()">
+      <option value="">Alle bronnen</option>
+      <option value="funda">Funda</option>
+      <option value="veilingnotaris">Veilingnotaris</option>
+      <option value="bog_auctions">BOG Auctions</option>
+      <option value="biedboek">Biedboek</option>
+    </select>
+    <input type="text" id="f-q" placeholder="Zoek adres…" oninput="debounceLoad()">
+    <label>Min. score <span id="f-score-v">30</span></label>
+    <input type="range" id="f-score" min="0" max="90" step="5" value="30"
+           oninput="document.getElementById('f-score-v').textContent=this.value" onchange="load()">
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>Score</th><th>Object</th><th>Stad</th><th>Wijk</th><th>Prijs</th><th>€/m²</th>
+      <th>Markt €/m²</th><th>t.o.v. markt</th>
+      <th>Label</th><th>Bouwjaar</th><th>Signalen</th><th>Bron</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <div id="srcstatus"></div>
+</div>
+
+<script>
+const fmt = n => n == null ? "–" : "€" + Math.round(n).toLocaleString("nl-NL");
+let t = null;
+let cityStats = {};
+
+async function loadCityStats() {
+  try { cityStats = await (await fetch("/api/city-stats")).json(); } catch (e) {}
+}
+function debounceLoad() { clearTimeout(t); t = setTimeout(load, 300); }
+
+async function loadStats() {
+  const s = await (await fetch("/api/stats")).json();
+  document.getElementById("c-total").textContent = s.total;
+  document.getElementById("c-hot").textContent = s.hot;
+  document.getElementById("c-avg").textContent = s.avg_score;
+  document.getElementById("c-cities").textContent = s.cities.length;
+  document.getElementById("c-sources").textContent = Object.keys(s.sources).length;
+  const pb = document.getElementById("btn-purge");
+  if (pb) pb.style.display = s.demo > 0 ? "inline-block" : "none";
+  const sel = document.getElementById("f-city");
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">Alle steden</option>' +
+    s.cities.map(c => `<option ${c===cur?"selected":""}>${c}</option>`).join("");
+}
+
+async function load() {
+  loadStats();
+  await loadCityStats();
+  const city = document.getElementById("f-city").value;
+  const source = document.getElementById("f-source").value;
+  const q = document.getElementById("f-q").value;
+  const min = document.getElementById("f-score").value;
+  const url = `/api/opportunities?city=${encodeURIComponent(city)}&source=${source}&min_score=${min}&q=${encodeURIComponent(q)}`;
+  const rows = await (await fetch(url)).json();
+  rowsById = {};
+  rows.forEach(r => rowsById[r.id] = r);
+  document.getElementById("rows").innerHTML = rows.map(r => {
+    const cls = r.flip_score >= 60 ? "s-hot" : r.flip_score >= 40 ? "s-warm" : "s-cool";
+    const cs = cityStats[(r.city || "").toLowerCase()];
+    const drops = (r.price_history || []).filter(h => h.to < h.from).length;
+    const flags = Object.entries(r.flags).filter(([,v]) => v)
+      .map(([k]) => `<span class="chip on">${k.replace(/_/g," ")}</span>`).join("");
+    const auction = r.source !== "funda";
+    return `<tr data-id="${r.id}" onclick="toggleDetail(event, ${r.id})" style="cursor:pointer;">
+      <td><span class="score ${cls}">${r.flip_score}</span></td>
+      <td><a href="${r.url}" target="_blank" rel="noopener">${r.address || "(onbekend)"}</a>
+          ${r.is_demo ? '<span class="badge-demo">demo</span>' : ""}
+          <div class="bd">${r.score_breakdown || ""}</div></td>
+      <td>${r.city || "–"}</td>
+      <td>${r.neighbourhood || "–"}</td>
+      <td>${fmt(r.price)}${drops ? ` <div class="drop">▼ ${drops}x verlaagd</div>` : ""}</td>
+      <td>${r.price_m2 ? fmt(r.price_m2) : "–"}</td>
+      <td class="muted" title="${r.bench_label || ""}">${r.bench_median ? fmt(r.bench_median) : "–"}
+          ${r.bench_label ? `<div style="font-size:10px">${r.bench_label}</div>` : ""}</td>
+      <td>${r.discount_pct == null ? '<span class="muted">–</span>' :
+            `<b style="color:${r.discount_pct >= 5 ? "var(--accent)" : r.discount_pct <= -5 ? "var(--hot)" : "var(--muted)"}">
+             ${r.discount_pct > 0 ? "-" : "+"}${Math.abs(r.discount_pct)}%</b>`}</td>
+      <td>${r.energy_label ? `<span class="label lab-${r.energy_label[0]}">${r.energy_label}</span>` : "–"}</td>
+      <td>${r.build_year || "–"}</td>
+      <td>${flags || '<span class="muted">–</span>'}</td>
+      <td><span class="badge-src ${auction ? "auction" : ""}">${r.source}</span>
+          ${r.auction_date ? `<div class="muted" style="font-size:11px">${r.auction_date}</div>` : ""}</td>
+    </tr>`;
+  }).join("") || '<tr><td colspan="12" class="muted" style="padding:30px;text-align:center">Geen objecten — verlaag de minimumscore of start een scrape.</td></tr>';
+  document.getElementById("lastupdate").textContent = "bijgewerkt " + new Date().toLocaleTimeString("nl-NL");
+  loadSources();
+}
+
+async function checkRunning() {
+  try {
+    const r = await (await fetch("/api/running")).json();
+    const el = document.getElementById("lastupdate");
+    if (r.running) el.textContent = "⏳ scrape draait — gestart " +
+      new Date(r.started + "Z").toLocaleTimeString("nl-NL");
+  } catch (e) {}
+}
+
+async function loadSources() {
+  const src = await (await fetch("/api/sources")).json();
+  document.getElementById("srcstatus").innerHTML = "Bronstatus: " + src.map(s => {
+    const cls = s.status === "ok" ? "ok" : s.status === "error" ? "err" : "na";
+    const when = s.last_run ? new Date(s.last_run).toLocaleString("nl-NL") : "nog niet gedraaid";
+    return `<span title="${(s.message||"").replace(/"/g,"'")}"><span class="dot ${cls}"></span>${s.source} — ${when}${s.found ? " ("+s.found+" gevonden)" : ""}</span>`;
+  }).join("");
+}
+
+function toggleUitleg() {
+  const el = document.getElementById("uitleg");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+let rowsById = {};
+
+function renderAnalyseHtml(r) {
+  const o = r.object || {}, w = r.waarde || {}, v = r.vergunningvrij || {}, c = r.buurt_cbs || {};
+  const row = (k, val) => val == null || val === "" ? "" :
+    `<div style="display:flex; justify-content:space-between; gap:12px; padding:3px 0; border-bottom:1px solid var(--border);"><span class="muted">${k}</span><b>${val}</b></div>`;
+  return `
+    <div style="font-size:16px; margin-bottom:8px;"><b>${r.adres}</b> <span class="muted">· ${r.wijk || ""} / ${r.buurt || ""}</span></div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px;">
+      <div>${row("Woonoppervlak", o.woonoppervlak_m2 ? o.woonoppervlak_m2 + " m²" : null)}
+           ${row("Bouwjaar", o.bouwjaar)}
+           ${row("Footprint pand", o.footprint_m2 ? o.footprint_m2 + " m²" : null)}
+           ${row("Perceel", o.perceel_m2 ? o.perceel_m2 + " m²" : null)}
+           ${row("Kadastraal", o.kadastraal)}</div>
+      <div>${row("Bebouwingsgebied (indicatie)", v.bebouwingsgebied_m2 ? v.bebouwingsgebied_m2 + " m²" : null)}
+           ${row("Vergunningvrij bij te bouwen", v.vergunningvrij_bijbouw_m2 ? "± " + v.vergunningvrij_bijbouw_m2 + " m²" : null)}
+           ${row("Gem. WOZ buurt", c.gem_woz_x1000 ? "€" + c.gem_woz_x1000 + "k" : null)}
+           ${row("Huishoudens met kinderen", c.huishoudens_met_kinderen)}
+           ${row("Koopwoningen buurt", c.pct_koopwoningen ? c.pct_koopwoningen + "%" : null)}</div>
+      <div>${row("€/m² stad (mediaan)", w.stad_eur_m2_mediaan ? fmt(w.stad_eur_m2_mediaan) : null)}
+           ${row("Indicatie huidige waarde", w.indicatie_huidige_waarde ? fmt(w.indicatie_huidige_waarde) : null)}
+           ${row("Uitbreiding (aanname)", w.uitbreiding_m2 ? w.uitbreiding_m2 + " m²" : null)}
+           ${row("Waarde-opbrengst uitbreiding", w.uitbreiding_opbrengst ? fmt(w.uitbreiding_opbrengst) : null)}
+           ${row("Bouwkosten (±€2.400/m²)", w.uitbreiding_bouwkosten ? fmt(w.uitbreiding_bouwkosten) : null)}
+           ${row("Netto potentie", w.uitbreiding_netto_potentie != null ? fmt(w.uitbreiding_netto_potentie) : null)}</div>
+    </div>
+    <div class="muted" style="margin-top:10px; font-size:12px;">${v.aanbouw_regel ? "Regel: " + v.aanbouw_regel + " · " : ""}${r.disclaimer || ""}</div>`;
+}
+
+async function toggleDetail(event, id) {
+  if (event.target.closest("a")) return;
+  const tr = document.querySelector(`tr[data-id="${id}"]`);
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList.contains("detail-row")) { existing.remove(); return; }
+  document.querySelectorAll(".detail-row").forEach(e => e.remove());
+  const r = rowsById[id];
+  if (!r) return;
+  const det = document.createElement("tr");
+  det.className = "detail-row";
+  const photo = r.photo_url ?
+    `<img src="${r.photo_url}" alt="" style="width:260px; max-height:180px; object-fit:cover; border-radius:10px; flex-shrink:0;">` :
+    `<div class="muted" style="width:260px; padding:20px; text-align:center; border:1px dashed var(--border); border-radius:10px; flex-shrink:0;">geen foto — verschijnt na volgende scrape</div>`;
+  det.innerHTML = `<td colspan="12" style="background:var(--panel2); padding:18px;">
+    <div style="display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap;">
+      ${photo}
+      <div style="flex:1; min-width:300px;" id="det-${id}">
+        <span class="muted">Potentie-analyse laden…</span>
+      </div>
+      <div style="flex-basis:100%;" id="scen-${id}"></div>
+      <div style="flex-basis:100%;" id="val-${id}"></div>
+    </div></td>`;
+  tr.after(det);
+  loadScenarios(id);
+  loadValuation("val-" + id, { listing_id: id });
+  try {
+    const q = `${r.address} ${r.city}`.trim();
+    const res = await (await fetch("/api/analyse?q=" + encodeURIComponent(q))).json();
+    document.getElementById("det-" + id).innerHTML = res.error ?
+      `<span style="color:var(--hot)">${res.error}</span>` : renderAnalyseHtml(res);
+  } catch (e) {
+    const el = document.getElementById("det-" + id);
+    if (el) el.innerHTML = '<span style="color:var(--hot)">Analyse mislukt — probeer opnieuw.</span>';
+  }
+}
+
+async function runAnalyse() {
+  const q = document.getElementById("an-q").value.trim();
+  if (q.length < 3) return;
+  const el = document.getElementById("an-result");
+  el.style.display = "block";
+  el.innerHTML = '<span class="muted">Bezig — BAG, Kadaster en CBS worden bevraagd…</span>';
+  try {
+    const r = await (await fetch("/api/analyse?q=" + encodeURIComponent(q))).json();
+    if (r.error) { el.innerHTML = `<span style="color:var(--hot)">${r.error}</span>`; return; }
+    const o = r.object || {}, w = r.waarde || {}, v = r.vergunningvrij || {}, c = r.buurt_cbs || {};
+    const row = (k, val) => val == null || val === "" ? "" :
+      `<div style="display:flex; justify-content:space-between; gap:12px; padding:3px 0; border-bottom:1px solid var(--border);"><span class="muted">${k}</span><b>${val}</b></div>`;
+    el.innerHTML = `
+      <div style="font-size:16px; margin-bottom:8px;"><b>${r.adres}</b> <span class="muted">· ${r.wijk || ""} / ${r.buurt || ""}</span></div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px;">
+        <div>${row("Woonoppervlak", o.woonoppervlak_m2 ? o.woonoppervlak_m2 + " m²" : null)}
+             ${row("Bouwjaar", o.bouwjaar)}
+             ${row("Footprint pand", o.footprint_m2 ? o.footprint_m2 + " m²" : null)}
+             ${row("Perceel", o.perceel_m2 ? o.perceel_m2 + " m²" : null)}
+             ${row("Kadastraal", o.kadastraal)}</div>
+        <div>${row("Bebouwingsgebied (indicatie)", v.bebouwingsgebied_m2 ? v.bebouwingsgebied_m2 + " m²" : null)}
+             ${row("Vergunningvrij bij te bouwen", v.vergunningvrij_bijbouw_m2 ? "± " + v.vergunningvrij_bijbouw_m2 + " m²" : null)}
+             ${row("Gem. WOZ buurt", c.gem_woz_x1000 ? "€" + c.gem_woz_x1000 + "k" : null)}
+             ${row("Huishoudens met kinderen", c.huishoudens_met_kinderen)}
+             ${row("Koopwoningen buurt", c.pct_koopwoningen ? c.pct_koopwoningen + "%" : null)}</div>
+        <div>${row("€/m² stad (mediaan)", w.stad_eur_m2_mediaan ? fmt(w.stad_eur_m2_mediaan) : null)}
+             ${row("Indicatie huidige waarde", w.indicatie_huidige_waarde ? fmt(w.indicatie_huidige_waarde) : null)}
+             ${row("Uitbreiding (aanname)", w.uitbreiding_m2 ? w.uitbreiding_m2 + " m²" : null)}
+             ${row("Waarde-opbrengst uitbreiding", w.uitbreiding_opbrengst ? fmt(w.uitbreiding_opbrengst) : null)}
+             ${row("Bouwkosten (±€2.400/m²)", w.uitbreiding_bouwkosten ? fmt(w.uitbreiding_bouwkosten) : null)}
+             ${row("Netto potentie", w.uitbreiding_netto_potentie != null ? fmt(w.uitbreiding_netto_potentie) : null)}</div>
+      </div>
+      <div class="muted" style="margin-top:10px; font-size:12px;">${v.aanbouw_regel ? "Regel: " + v.aanbouw_regel + " · " : ""}${r.disclaimer}</div>
+      <div id="val-an"></div>`;
+    loadValuation("val-an", { q });
+  } catch (e) {
+    el.innerHTML = '<span style="color:var(--hot)">Analyse mislukt — probeer opnieuw.</span>';
+  }
+}
+
+// ── Scenario-engine & Top 5 ────────────────────────────────────
+let profilesCache = [];
+const PP_FIELDS = ["focus_tier","renov_uplift","app_premium","ovb_pct",
+                   "split_kosten","huur_m2","opex_pct","waarde_band",
+                   "min_area","max_area","min_price","max_price","max_price_m2"];
+
+async function purgeDemo() {
+  if (!confirm("Alle demo-objecten definitief verwijderen?")) return;
+  await fetch("/api/purge-demo", { method: "POST" });
+  loadStats(); load(); loadTop5();
+}
+
+function curProfile() { return document.getElementById("p-profile").value || "standaard"; }
+
+async function loadProfiles(keep) {
+  try {
+    profilesCache = await (await fetch("/api/profiles")).json();
+    const sel = document.getElementById("p-profile");
+    const prev = keep ? sel.value : "";
+    sel.innerHTML = profilesCache.map(p => `<option value="${p.name}">${p.name}</option>`).join("");
+    if (prev && profilesCache.some(p => p.name === prev)) sel.value = prev;
+    else if (profilesCache.some(p => p.name === "standaard")) sel.value = "standaard";
+    fillProfileForm();
+  } catch (e) {}
+}
+
+function fillProfileForm() {
+  const p = profilesCache.find(x => x.name === curProfile());
+  if (!p) return;
+  PP_FIELDS.forEach(k => {
+    const el = document.getElementById("pp-" + k);
+    if (el) el.value = p.params[k];
+  });
+}
+
+function onProfileChange() { fillProfileForm(); loadTop5(); }
+function toggleAannames() {
+  const el = document.getElementById("p-edit");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+async function saveProfile(asNew) {
+  let name = curProfile();
+  if (asNew) {
+    name = prompt("Naam voor het nieuwe profiel (bijv. 'week 30'):", "");
+    if (!name) return;
+  }
+  const params = {};
+  PP_FIELDS.forEach(k => {
+    const el = document.getElementById("pp-" + k);
+    if (el && el.value !== "") params[k] = parseFloat(el.value);
+  });
+  await fetch("/api/profiles", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, params }) });
+  await loadProfiles(true);
+  document.getElementById("p-profile").value = name;
+  loadTop5();
+}
+
+async function loadTop5() {
+  const el = document.getElementById("top5-list");
+  el.innerHTML = '<span class="muted">Doorrekenen…</span>';
+  try {
+    const rank = document.getElementById("p-rank").value;
+    const r = await (await fetch("/api/top5?n=5&rank=" + rank + "&profile=" + encodeURIComponent(curProfile()))).json();
+    const fl = [];
+    if (r.params.min_area) fl.push(`≥${r.params.min_area} m²`);
+    if (r.params.max_area) fl.push(`≤${r.params.max_area} m²`);
+    if (r.params.min_price) fl.push(`≥${fmt(r.params.min_price)}`);
+    if (r.params.max_price) fl.push(`≤${fmt(r.params.max_price)}`);
+    if (r.params.max_price_m2) fl.push(`≤${fmt(r.params.max_price_m2)}/m²`);
+    const rankLbl = {risk: "risico-gecorrigeerd (netto, ná financiering)",
+                     roi: "rendement (ROI)", winst: "ruwe mid-winst"}[rank] || rank;
+    document.getElementById("top5-meta").textContent =
+      `${r.beoordeeld} deals na risico-filter · gerangschikt op ${rankLbl} · focus €${r.params.focus_tier}/m² verbouw · profiel "${curProfile()}"` +
+      (fl.length ? ` · filters: ${fl.join(" · ")}` : "");
+    if (!r.top.length) {
+      el.innerHTML = '<span class="muted">Nog geen doorrekenbare objecten in de regio — draai eerst een scrape (en purge demo-data).</span>';
+      return;
+    }
+    el.innerHTML = r.top.map((o, i) => {
+      // Conservatieve nettowinst (na financiering, ongunstig scenario) is de leidende maat.
+      const cons = o.best_laag != null ? o.best_laag : o.best_mid;
+      const col = cons >= 25000 ? "var(--accent)" : cons >= 0 ? "inherit" : "var(--hot)";
+      const conf = o.confidence != null ? Math.round(o.confidence * 100) : null;
+      const confCol = conf >= 80 ? "var(--accent)" : conf >= 60 ? "#c9a227" : "var(--hot)";
+      const badges = [];
+      if (o.split_allowed === false) badges.push('<span title="niet splitsbaar — alleen flip" style="opacity:.7;">flip-only</span>');
+      (o.motivated_tags || []).forEach(t => badges.push(`<span style="color:var(--accent)">🔥 ${t}</span>`));
+      if (conf != null) badges.push(`<span style="color:${confCol}" title="databetrouwbaarheid">${conf}% zeker</span>`);
+      return `<div style="display:flex; gap:12px; align-items:center; padding:9px 6px; border-bottom:1px solid var(--border); cursor:pointer;"
+                   onclick="document.getElementById('f-q').value='${(o.address || "").replace(/'/g, "")}';document.getElementById('f-score').value=0;document.getElementById('f-score-v').textContent=0;load();">
+        <b style="width:22px; text-align:center; opacity:.6;">${i + 1}</b>
+        <div style="flex:1; min-width:180px;"><b>${o.address}</b>
+          <span class="muted">· ${o.city}${o.neighbourhood ? " / " + o.neighbourhood : ""}</span><br>
+          <span class="muted" style="font-size:12px;">${fmt(o.price)} · ${o.living_area || "?"} m² · ${fmt(o.price_m2)}/m² · score ${o.flip_score}</span>
+          <span style="font-size:11px; display:inline-flex; gap:8px; flex-wrap:wrap;">${badges.join(" ")}</span></div>
+        <div style="text-align:right; min-width:180px;">
+          <b style="color:${col}">${cons >= 0 ? "+" : ""}${fmt(cons)}</b>
+          <span class="muted" style="font-size:12px;"> netto · ${o.best_strategie}</span><br>
+          <span class="muted" style="font-size:12px;">ROI ${o.roi_laag_pct != null ? o.roi_laag_pct + "%" : "–"} · marge ${o.marge_pct != null ? o.marge_pct + "%" : "–"} · tot ${fmt(o.best_mid)} mid</span></div>
+        ${o.url ? `<a href="${o.url}" target="_blank" onclick="event.stopPropagation()">funda ↗</a>` : ""}
+      </div>`;
+    }).join("");
+  } catch (e) {
+    el.innerHTML = '<span style="color:var(--hot)">Top 5 laden mislukt.</span>';
+  }
+}
+
+async function loadScenarios(id) {
+  const el = document.getElementById("scen-" + id);
+  if (!el) return;
+  el.innerHTML = '<span class="muted">📐 Scenario’s doorrekenen…</span>';
+  try {
+    const r = await (await fetch(`/api/scenarios?listing_id=${id}&profile=` + encodeURIComponent(curProfile()))).json();
+    if (r.error) { el.innerHTML = `<span class="muted">Scenario's: ${r.error}</span>`; return; }
+    const rows = r.rows.map(x => {
+      const c = v => v >= 0 ? "var(--accent)" : "var(--hot)";
+      return `<tr>
+        <td>€${x.tier}/m²</td><td>${fmt(x.investering_flip)}</td><td>${fmt(x.kostprijs_m2)}</td>
+        <td style="color:${c(x.flip_mid)}">${fmt(x.flip_laag)} … ${fmt(x.flip_hoog)}</td>
+        <td style="color:${c(x.split_mid)}">${fmt(x.split_laag)} … ${fmt(x.split_hoog)}</td>
+        <td>${x.bar_pct != null ? x.bar_pct + "% / " + x.netto_pct + "%" : "–"}</td>
+        <td><b style="color:${c(x.best_mid)}">${x.best_mid >= 0 ? "▲" : "▼"} ${x.best_strategie}</b></td>
+      </tr>`;
+    }).join("");
+    el.innerHTML = `
+      <div style="margin-top:6px;"><b>📐 Scenario's</b>
+        <span class="muted" style="font-size:12px;">profiel "${curProfile()}" · stadsmediaan ${fmt(r.aannames.stadsmediaan_m2)}/m² ·
+        woning na renovatie ${fmt(r.aannames.huis_m2)}/m² · appartement ${fmt(r.aannames.app_m2)}/m² ·
+        all-in aankoop ${fmt(r.aankoop.all_in)} (incl. ${fmt(r.aankoop.ovb)} OVB) ·
+        break-even verbouwbudget: flip ${fmt(r.breakeven_flip_m2)}/m², splitsen ${fmt(r.breakeven_split_m2)}/m²</span>
+      <table style="margin-top:8px; font-size:13px;">
+        <thead><tr><th>Verbouw</th><th>Investering</th><th>Kostprijs/m²</th>
+          <th>Flip (laag…hoog)</th><th>Splitsen (laag…hoog)</th><th>BAR/netto</th><th>Verdict</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+  } catch (e) {
+    el.innerHTML = '<span class="muted">Scenario’s laden mislukt.</span>';
+  }
+}
+
+// ── AI-taxatie ─────────────────────────────────────────────────
+const valState = {};
+const FIN_N = {1:"eenvoudig",2:"gedateerd",3:"gemiddeld",4:"goed/modern",5:"hoogwaardig"};
+const MAI_N = {1:"slecht",2:"matig",3:"redelijk",4:"goed",5:"uitstekend"};
+const LOC_N = {1:"ongunstig",2:"matig",3:"gemiddeld",4:"goed",5:"toplocatie"};
+const LABELS_ALL = ["A+++","A++","A+","A","B","C","D","E","F","G"];
+
+async function loadValuation(cid, base, overrides, exclude) {
+  const st = valState[cid] = valState[cid] || {};
+  st.base = base || st.base;
+  st.overrides = overrides || st.overrides || {};
+  st.exclude = exclude || st.exclude || new Set();
+  const el = document.getElementById(cid);
+  if (!el) return;
+  el.innerHTML = '<div class="vx"><span class="muted">💶 AI-taxatie berekenen…</span></div>';
+  const p = new URLSearchParams(st.base);
+  for (const k in st.overrides)
+    if (st.overrides[k] !== "" && st.overrides[k] != null) p.set(k, st.overrides[k]);
+  if (st.exclude.size) p.set("exclude", [...st.exclude].join(","));
+  try {
+    const r = await (await fetch("/api/valuation?" + p)).json();
+    el.innerHTML = r.error
+      ? `<div class="vx"><b>💶 AI-taxatie</b><div class="muted" style="margin-top:6px">${r.error}</div></div>`
+      : valuationHtml(cid, r);
+  } catch (e) {
+    el.innerHTML = '<div class="vx"><span style="color:var(--hot)">Taxatie mislukt — probeer opnieuw.</span></div>';
+  }
+}
+function valSet(cid, key, value) {
+  valState[cid].overrides[key] = value;
+  loadValuation(cid);
+}
+function valToggleRef(cid, id) {
+  const ex = valState[cid].exclude;
+  ex.has(id) ? ex.delete(id) : ex.add(id);
+  loadValuation(cid);
+}
+function valReset(cid) {
+  valState[cid].overrides = {}; valState[cid].exclude = new Set();
+  loadValuation(cid);
+}
+
+function valuationHtml(cid, r) {
+  const inp = r.inputs || {}, s = r.subject || {}, inc = r.income || {};
+  const confCol = {hoog:"var(--accent)", middel:"var(--warn)", laag:"var(--hot)"}[r.confidence] || "var(--muted)";
+  const aiChip = k => (r.ai_estimated || []).includes(k)
+    ? ' <span class="chip" style="border-color:var(--accent2);color:var(--accent2)">AI</span>' : "";
+  const slider = (key, val, names, title) => `
+    <label class="vx-ctl">${title}${aiChip(key)}
+      <input type="range" min="1" max="5" step="1" value="${val}"
+             onchange="valSet('${cid}','${key}',this.value)">
+      <span>${val} · ${names[val] || ""}</span></label>`;
+  const margin = r.margin != null ? `
+    <div class="vx-margin" style="color:${r.margin >= 0 ? "var(--accent)" : "var(--hot)"}">
+      ${r.margin >= 0 ? "▲" : "▼"} ${fmt(Math.abs(r.margin))} (${r.margin_pct}%) t.o.v. vraagprijs ${fmt(r.asking_price)}
+    </div>` : "";
+  const refRows = (r.refs || []).map(x => `
+    <tr style="${x.included ? "" : "opacity:.4"}">
+      <td><input type="checkbox" ${x.included ? "checked" : ""} onchange="valToggleRef('${cid}',${x.id})"></td>
+      <td>${x.address}${x.is_demo ? ' <span class="badge-demo">demo</span>' : ""}</td>
+      <td>${x.neighbourhood || "–"}</td>
+      <td>${fmt(x.price)}</td><td>${x.living_area ? Math.round(x.living_area) + " m²" : "–"}</td>
+      <td>${fmt(x.price_m2)}</td>
+      <td style="color:${x.correction_pct >= 0 ? "var(--accent)" : "var(--hot)"}">${x.correction_pct >= 0 ? "+" : ""}${x.correction_pct}%</td>
+      <td><b>${fmt(x.adjusted_m2)}</b></td>
+    </tr>`).join("");
+  return `<div class="vx">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+      <b>💶 AI-taxatie</b>
+      <button onclick="valReset('${cid}')" style="font-size:12px">↺ herstel AI-inschatting</button>
+    </div>
+    <div class="vx-hero" style="margin-top:8px;">
+      <span class="amount">${fmt(r.value)}</span>
+      <span class="muted">${fmt(r.value_low)} – ${fmt(r.value_high)}</span>
+      <span class="muted">${fmt(r.m2_price)}/m²</span>
+      <span class="vx-conf" style="color:${confCol}">betrouwbaarheid: ${r.confidence} · ${r.n_refs} refs · σ ${r.cv_pct}%</span>
+    </div>
+    ${margin}
+    <div class="vx-ctls">
+      ${slider("finish", inp.finish, FIN_N, "Afwerking")}
+      ${slider("maintenance", inp.maintenance, MAI_N, "Onderhoud")}
+      ${slider("location", inp.location, LOC_N, "Ligging")}
+      <label class="vx-ctl">Woonoppervlak (m²)
+        <input type="number" value="${s.living_area || ""}" onchange="valSet('${cid}','area',this.value)"></label>
+      <label class="vx-ctl">Energielabel
+        <select onchange="valSet('${cid}','label',this.value)">
+          ${LABELS_ALL.map(l => `<option ${l === (s.energy_label || "C") ? "selected" : ""}>${l}</option>`).join("")}
+        </select></label>
+      <label class="vx-ctl">Exploitatiekosten (%)
+        <input type="number" value="${inc.opex_pct}" onchange="valSet('${cid}','opex_pct',this.value)"></label>
+    </div>
+    <div style="overflow-x:auto;">
+    <table><thead><tr><th></th><th>Referentie</th><th>Wijk</th><th>Vraagprijs</th><th>m²</th><th>€/m²</th><th>Correctie</th><th>Gecorr. €/m²</th></tr></thead>
+    <tbody>${refRows}</tbody></table></div>
+    <div class="vx-income">
+      <span>Markthuur <b>${fmt(inc.rent_month)}</b>/mnd</span>
+      <span>Bruto jaarhuur <b>${fmt(inc.rent_year)}</b></span>
+      <span>BAR <b>${inc.bar_pct}%</b></span>
+      <span>NAR <b>${inc.nar_pct}%</b></span>
+    </div>
+    <div class="muted" style="margin-top:10px; font-size:12px;">
+      Bronnen: ${(r.sources || []).join(" · ")}. ${r.disclaimer || ""}</div>
+  </div>`;
+}
+
+async function refresh() {
+  await fetch("/api/refresh", { method: "POST" });
+  document.getElementById("lastupdate").textContent = "scrape gestart — dit kan enkele minuten duren";
+  setTimeout(load, 30000);
+}
+
+// ── Marktscorebord (benchmarks uit verkocht aanbod) ────────────
+let benchCache = {};
+const SEGS = ["klein", "midden", "groot"];
+
+async function loadBenchmarks() {
+  try {
+    benchCache = await (await fetch("/api/benchmarks")).json();
+    const cities = Object.keys(benchCache).sort();
+    const sel = document.getElementById("b-city");
+    const cur = sel.value;
+    sel.innerHTML = cities.map(c => `<option ${c===cur?"selected":""}>${c}</option>`).join("");
+    renderBenchmarks();
+  } catch (e) {}
+}
+
+function benchCell(b) {
+  if (!b) return '<td class="muted">–</td>';
+  return `<td>${fmt(b.p25)} / <b>${fmt(b.median)}</b> / ${fmt(b.p75)} <span class="muted">(${b.n})</span></td>`;
+}
+
+function renderBenchmarks() {
+  const el = document.getElementById("bench-body");
+  const city = document.getElementById("b-city").value;
+  const cs = benchCache[city];
+  if (!cs) {
+    el.innerHTML = '<span class="muted">Nog geen benchmarks — draai eerst een verkocht-scrape (knop hierboven). Tot die tijd wordt gescoord tegen het actieve aanbod.</span>';
+    return;
+  }
+  const wijken = Object.keys(cs.wijken || {}).sort();
+  const hasSold = SEGS.some(s => cs.stad[s]);
+  let html = `<table style="font-size:13px;"><thead><tr>
+    <th></th><th>Klein &lt;50 m²</th><th>Midden 50–100 m²</th><th>Groot &gt;100 m²</th></tr></thead><tbody>`;
+  if (hasSold)
+    html += `<tr><td><b>${city}</b> <span class="muted">(verkocht)</span></td>` +
+            SEGS.map(s => benchCell(cs.stad[s])).join("") + "</tr>";
+  if (SEGS.some(s => (cs.actief||{})[s]))
+    html += `<tr><td class="muted">${city} (actief aanbod)</td>` +
+            SEGS.map(s => benchCell((cs.actief||{})[s])).join("") + "</tr>";
+  html += wijken.map(w =>
+    `<tr><td style="padding-left:22px;">${w}</td>` +
+    SEGS.map(s => benchCell(cs.wijken[w][s])).join("") + "</tr>").join("");
+  html += "</tbody></table>";
+  el.innerHTML = html;
+}
+
+async function refreshSold() {
+  await fetch("/api/refresh-sold", { method: "POST" });
+  document.getElementById("lastupdate").textContent =
+    "verkocht-scrape gestart — benchmarks verschijnen zodra de eerste stad klaar is";
+  setTimeout(loadBenchmarks, 60000);
+}
+
+load();
+loadProfiles().then(loadTop5);
+loadBenchmarks();
+checkRunning();
+setInterval(load, 120000);
+setInterval(loadBenchmarks, 300000);
+setInterval(checkRunning, 15000);
+</script>
+
+<script>
+async function checkRunning() {
+  try {
+    const r = await (await fetch("/api/running?t=" + Date.now())).json();
+    const el = document.getElementById("lastupdate");
+    if (!el) return;
+    const fu = (r.progress && r.progress.funda) || null;
+    const fs = (r.progress && r.progress.funda_sold) || null;
+    const act = fs && (!fu || fs.cities_done < fs.cities_total) ? fs : fu;
+    const naam = act === fs ? "verkocht-scrape" : "scrape";
+    if (r.running && act && act.cities_total) {
+      el.textContent = "\u23F3 " + naam + " " + act.cities_done + "/" + act.cities_total +
+        " plaatsen \u00B7 " + act.found + " objecten \u00B7 nu: " + (act.current || "\u2026");
+      el.style.color = "var(--accent)";
+    } else if (r.running) {
+      el.textContent = "\u23F3 scrape draait\u2026";
+      el.style.color = "var(--accent)";
+    } else {
+      el.style.color = "";
+      el.textContent = "bijgewerkt " + new Date().toLocaleTimeString("nl-NL");
+    }
+  } catch (e) {}
+}
+checkRunning();
+setInterval(checkRunning, 10000);
+</script>
+</body>
+</html>

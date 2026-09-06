@@ -1,0 +1,342 @@
+"""Scenario-engine (Vastgoed Scan): flip / splitsen / verhuur per verbouwbudget.
+
+Rekent elk object door tegen een aannamenprofiel. De verkoopwaarde per m² wordt
+NIET hardcoded maar afgeleid van de stadsmediaan uit de eigen database:
+  gerenoveerde eengezinswoning  = stadsmediaan × renov_uplift
+  gerenoveerd appartement       = woningwaarde × app_premium
+Zo schaalt de Top 5 automatisch mee per stad. Profielen zijn per week aan te
+passen via het dashboard; elke aanname is te overrulen.
+
+Alle uitkomsten zijn indicaties vóór financieringskosten en belasting.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import statistics
+
+REGIO_EINDHOVEN = [
+    "eindhoven", "veldhoven", "nuenen", "waalre", "best", "geldrop",
+    "mierlo", "geldrop-mierlo", "son en breugel", "helmond",
+    "valkenswaard", "eersel", "oirschot",
+]
+
+DEFAULT_PARAMS = {
+    "ovb_pct": 8.0,          # overdrachtsbelasting beleggers/BV 2026
+    "kk_vast": 6000.0,       # notaris/advies/overig
+    "tiers": [1000, 1500, 2000, 2500],   # verbouwbudget €/m²
+    "focus_tier": 1500,      # tier waarop gerangschikt wordt
+    "renov_uplift": 1.12,    # gerenoveerd t.o.v. stadsmediaan €/m²
+    "app_premium": 1.12,     # appartement-premie t.o.v. woning €/m²
+    "waarde_band": 0.06,     # ± band om de waarde (laag/hoog)
+    "split_kosten": 30000.0, # leges, akte, VvE, advies
+    "go_verlies_pct": 3.0,   # verlies verkoopbaar oppervlak bij splitsing
+    "huur_m2": 20.0,         # kale huur €/m²/maand
+    "opex_pct": 25.0,        # exploitatiekosten verhuur
+    # Financiering / looptijd — nodig voor een eerlijke (netto) winst
+    "rente_pct": 5.5,        # financieringsrente %/jaar over de inleg
+    "looptijd_mnd": 9,       # aankoop -> verkoop, incl. verbouw
+    # Risico-drempels voor de Top (0 = uit) — een deal moet ook conservatief lonen
+    "min_conservatief": 0,   # min. conservatieve nettowinst € (na financiering)
+    "min_roi_pct": 0,        # min. conservatieve ROI % op de inleg
+    "min_marge_pct": 0,      # min. veiligheidsmarge % (hoever verkoopprijs mag dalen)
+    # Top 5-filters (0 = geen limiet) — per profiel instelbaar
+    "min_area": 0,           # minimale woonoppervlakte m²
+    "max_area": 0,           # maximale woonoppervlakte m²
+    "min_price": 0,          # minimale vraagprijs €
+    "max_price": 0,          # maximale vraagprijs €
+    "max_price_m2": 0,       # maximale aankoopprijs €/m²
+}
+
+SEED_PROFILES = {
+    "standaard":    {},
+    "conservatief": {"renov_uplift": 1.05, "app_premium": 1.08,
+                     "focus_tier": 2000, "waarde_band": 0.08},
+    "agressief":    {"renov_uplift": 1.18, "app_premium": 1.15,
+                     "focus_tier": 1200, "tiers": [1000, 1200, 1500, 2000]},
+}
+
+
+def merged_params(overrides: dict | None) -> dict:
+    p = dict(DEFAULT_PARAMS)
+    for k, v in (overrides or {}).items():
+        if k in p and v is not None:
+            p[k] = v
+    return p
+
+
+def city_medians_all() -> dict[str, float]:
+    from .db import Listing, SessionLocal
+    per_city: dict[str, list[float]] = {}
+    with SessionLocal() as s:
+        for l in s.query(Listing).filter(Listing.price_m2.isnot(None),
+                                         Listing.price_m2 > 0,
+                                         Listing.is_demo.is_(False)):
+            if l.city:
+                per_city.setdefault(l.city.lower(), []).append(l.price_m2)
+    return {c: statistics.median(v) for c, v in per_city.items() if len(v) >= 3}
+
+
+def city_counts_all() -> dict[str, int]:
+    """Aantal referentie-objecten per stad — maat voor databetrouwbaarheid."""
+    from .db import Listing, SessionLocal
+    per_city: dict[str, int] = {}
+    with SessionLocal() as s:
+        for l in s.query(Listing).filter(Listing.price_m2.isnot(None),
+                                         Listing.price_m2 > 0,
+                                         Listing.is_demo.is_(False)):
+            if l.city:
+                per_city[l.city.lower()] = per_city.get(l.city.lower(), 0) + 1
+    return per_city
+
+
+def _confidence(n_comps: int, listing: dict) -> float:
+    """0.4–1.0: schaalt met aantal comps en volledigheid van de objectdata."""
+    base = min(1.0, 0.5 + n_comps / 40.0)
+    missing = sum(1 for k in ("energy_label", "build_year") if not listing.get(k))
+    return max(0.4, round(base * (1 - 0.12 * missing), 3))
+
+
+def _motivated(listing: dict) -> tuple[float, list[str]]:
+    """Boost voor gemotiveerde verkoper (prijsverlaging / veiling)."""
+    factor, tags = 1.0, []
+    hist = listing.get("price_history") or []
+    drops = [h for h in hist if isinstance(h, dict) and h.get("to", 0) < h.get("from", 0)]
+    if drops:
+        factor += 0.12 * min(len(drops), 2)
+        tags.append(f"{len(drops)}× prijsverlaging")
+    if (listing.get("source") or "") in AUCTION_SOURCES_SC:
+        factor += 0.15
+        tags.append("veiling")
+    return min(factor, 1.4), tags
+
+
+AUCTION_SOURCES_SC = {"veilingnotaris", "bog_auctions", "biedboek"}
+
+
+def scenario_table(listing: dict, params: dict, city_median: float | None) -> dict:
+    """listing: dict met price, living_area, city (to_dict() van een Listing)."""
+    price = listing.get("price") or 0
+    area = listing.get("living_area") or 0
+    if not price or not area:
+        return {"error": "prijs of woonoppervlak ontbreekt"}
+    if not city_median:
+        return {"error": f"te weinig marktdata voor {listing.get('city')} (min. 3 objecten nodig)"}
+
+    p = params
+    huis_m2 = city_median * p["renov_uplift"]
+    app_m2 = huis_m2 * p["app_premium"]
+    band = p["waarde_band"]
+    ovb = price * p["ovb_pct"] / 100
+    basis = price + ovb + p["kk_vast"]
+    verkoopbaar = area * (1 - p["go_verlies_pct"] / 100)
+
+    # Splitsen alleen als het object daadwerkelijk splitsbaar is (of expliciet
+    # vrijgegeven). Zo verdwijnt fictieve splitswinst op niet-splitsbare panden.
+    flags = listing.get("flags") or {}
+    split_allowed = bool(flags.get("splitsvergunning") or flags.get("splits_bouwkundig")
+                         or flags.get("splits_kadastraal")) if listing.get("flags") is not None else True
+
+    rente = p.get("rente_pct", 5.5) / 100
+    looptijd = p.get("looptijd_mnd", 9) / 12.0
+
+    rows = []
+    for tier in p["tiers"]:
+        verbouw = tier * area
+        inv_flip = basis + verbouw
+        inv_split = inv_flip + p["split_kosten"]
+        fin_flip = inv_flip * rente * looptijd      # financieringskosten (holding)
+        fin_split = inv_split * rente * looptijd
+        opbr_flip = area * huis_m2
+        opbr_split = verkoopbaar * app_m2
+        # netto = opbrengst - investering - financiering
+        flip_mid = opbr_flip - inv_flip - fin_flip
+        split_mid = (opbr_split - inv_split - fin_split) if split_allowed else None
+        jaarhuur = verkoopbaar * p["huur_m2"] * 12
+        row = {
+            "tier": tier,
+            "investering_flip": round(inv_flip),
+            "investering_split": round(inv_split),
+            "financiering_flip": round(fin_flip),
+            "financiering_split": round(fin_split),
+            "kostprijs_m2": round((inv_flip + fin_flip) / area),
+            "flip_laag": round(opbr_flip * (1 - band) - inv_flip - fin_flip),
+            "flip_mid": round(flip_mid),
+            "flip_hoog": round(opbr_flip * (1 + band) - inv_flip - fin_flip),
+            "split_allowed": split_allowed,
+            "split_laag": round(opbr_split * (1 - band) - inv_split - fin_split) if split_allowed else None,
+            "split_mid": round(split_mid) if split_allowed else None,
+            "split_hoog": round(opbr_split * (1 + band) - inv_split - fin_split) if split_allowed else None,
+            "bar_pct": round(jaarhuur / inv_split * 100, 1) if inv_split else None,
+            "netto_pct": round(jaarhuur * (1 - p["opex_pct"] / 100) / inv_split * 100, 1)
+                         if inv_split else None,
+        }
+        # Beste strategie op mid-scenario (splitsen alleen als toegestaan)
+        cand = [("flip", flip_mid, inv_flip, opbr_flip, row["flip_laag"])]
+        if split_allowed:
+            cand.append(("split", split_mid, inv_split, opbr_split, row["split_laag"]))
+        best = max(cand, key=lambda c: c[1])
+        strat, best_mid, best_inv, best_opbr, best_laag = best
+        # Veiligheidsmarge: hoever mag de verkoopprijs zakken vóór break-even
+        # (inclusief financiering) t.o.v. het mid-scenario.
+        be_opbr = best_inv + (best_inv * rente * looptijd)
+        mos = (best_opbr - be_opbr) / best_opbr * 100 if best_opbr else 0
+        row.update({
+            "best_mid": round(best_mid),
+            "best_laag": round(best_laag),          # conservatieve nettowinst
+            "best_strategie": "splitsen" if strat == "split" else "flip",
+            "best_investering": round(best_inv),
+            "roi_pct": round(best_mid / best_inv * 100, 1) if best_inv else None,
+            "roi_laag_pct": round(best_laag / best_inv * 100, 1) if best_inv else None,
+            "marge_pct": round(mos, 1),
+        })
+        rows.append(row)
+
+    focus = next((r for r in rows if r["tier"] == p["focus_tier"]), rows[0])
+    be_flip = (area * huis_m2 - basis) / area
+    be_split = (verkoopbaar * app_m2 - basis - p["split_kosten"]) / area
+    return {
+        "aannames": {**p, "stadsmediaan_m2": round(city_median),
+                     "huis_m2": round(huis_m2), "app_m2": round(app_m2)},
+        "aankoop": {"prijs": price, "ovb": round(ovb), "all_in": round(basis),
+                    "prijs_m2": round(price / area)},
+        "split_allowed": split_allowed,
+        "breakeven_flip_m2": round(be_flip),
+        "breakeven_split_m2": round(be_split),
+        "rows": rows,
+        "focus": focus,
+    }
+
+
+def top_listings(profile_params: dict, cities: list[str] | None = None,
+                 n: int = 5, min_score: int = 0, rank: str = "risk") -> dict:
+    """Rangschik objecten. rank:
+    'risk'  = deal_score = conservatieve nettowinst × betrouwbaarheid × motivatie (default)
+    'roi'   = conservatieve ROI % op de inleg (kapitaal-efficiënt, min. moeite)
+    'winst' = ruwe mid-upside (oud gedrag)."""
+    from .db import Listing, SessionLocal
+    cities = [c.lower() for c in (cities or REGIO_EINDHOVEN)]
+    medians = city_medians_all()
+    counts = city_counts_all()
+    params = merged_params(profile_params)
+
+    results = []
+    with SessionLocal() as s:
+        q = (s.query(Listing)
+             .filter(Listing.is_demo.is_(False),
+                     Listing.price.isnot(None), Listing.price > 0,
+                     Listing.living_area.isnot(None), Listing.living_area > 0))
+        if min_score:
+            q = q.filter(Listing.flip_score >= min_score)
+        for l in q.all():
+            if (l.city or "").lower() not in cities:
+                continue
+            # profielfilters (0 = uit)
+            if params["min_area"] and l.living_area < params["min_area"]:
+                continue
+            if params["max_area"] and l.living_area > params["max_area"]:
+                continue
+            if params["min_price"] and l.price < params["min_price"]:
+                continue
+            if params["max_price"] and l.price > params["max_price"]:
+                continue
+            if params["max_price_m2"] and (l.price_m2 or 0) > params["max_price_m2"]:
+                continue
+            d = l.to_dict()
+            tab = scenario_table(d, params, medians.get((l.city or "").lower()))
+            if "error" in tab:
+                continue
+            f = tab["focus"]
+
+            conf = _confidence(counts.get((l.city or "").lower(), 0), d)
+            motiv, motiv_tags = _motivated(d)
+            best_laag = f.get("best_laag", f["best_mid"])
+            deal_score = round(max(0, best_laag) * conf * motiv)
+
+            # Risico-drempels (0 = uit)
+            if params["min_conservatief"] and best_laag < params["min_conservatief"]:
+                continue
+            if params["min_roi_pct"] and (f.get("roi_laag_pct") or -999) < params["min_roi_pct"]:
+                continue
+            if params["min_marge_pct"] and (f.get("marge_pct") or -999) < params["min_marge_pct"]:
+                continue
+            # In risico-modus tellen alleen deals die óók conservatief lonen
+            if rank in ("risk", "roi") and best_laag <= 0:
+                continue
+
+            results.append({
+                "id": l.id, "address": l.address, "city": l.city,
+                "neighbourhood": l.neighbourhood, "url": l.url,
+                "photo_url": l.photo_url,
+                "price": l.price, "living_area": l.living_area,
+                "price_m2": l.price_m2, "energy_label": l.energy_label,
+                "build_year": l.build_year, "flip_score": l.flip_score,
+                "score_breakdown": l.score_breakdown,
+                "best_mid": f["best_mid"], "best_laag": best_laag,
+                "best_strategie": f["best_strategie"],
+                "split_allowed": tab.get("split_allowed", True),
+                "flip_mid": f["flip_mid"], "split_mid": f.get("split_mid"),
+                "roi_pct": f.get("roi_pct"), "roi_laag_pct": f.get("roi_laag_pct"),
+                "marge_pct": f.get("marge_pct"), "financiering": f.get("financiering_flip"),
+                "bar_pct": f["bar_pct"], "kostprijs_m2": f["kostprijs_m2"],
+                "confidence": conf, "motivated": round(motiv, 2),
+                "motivated_tags": motiv_tags, "deal_score": deal_score,
+                "breakeven_flip_m2": tab["breakeven_flip_m2"],
+                "breakeven_split_m2": tab["breakeven_split_m2"],
+            })
+
+    key = {"risk": lambda r: r["deal_score"],
+           "roi": lambda r: (r.get("roi_laag_pct") or -999),
+           "winst": lambda r: r["best_mid"]}.get(rank, lambda r: r["deal_score"])
+    results.sort(key=key, reverse=True)
+    return {
+        "generated": dt.datetime.utcnow().isoformat(),
+        "params": params,
+        "rank": rank,
+        "cities": cities,
+        "beoordeeld": len(results),
+        "top": results[:n],
+    }
+
+
+# ── profielen in de database ─────────────────────────────────────
+
+def list_profiles() -> list[dict]:
+    from .db import Profile, SessionLocal
+    with SessionLocal() as s:
+        return [{"name": p.name, "params": merged_params(json.loads(p.params or "{}")),
+                 "updated": p.updated.isoformat() if p.updated else None}
+                for p in s.query(Profile).order_by(Profile.name).all()]
+
+
+def get_profile(name: str) -> dict:
+    from .db import Profile, SessionLocal
+    with SessionLocal() as s:
+        p = s.query(Profile).filter_by(name=(name or "standaard")).one_or_none()
+        return merged_params(json.loads(p.params) if p else {})
+
+
+def save_profile(name: str, params: dict) -> dict:
+    from .db import Profile, SessionLocal
+    clean = {k: v for k, v in (params or {}).items() if k in DEFAULT_PARAMS}
+    with SessionLocal() as s:
+        p = s.query(Profile).filter_by(name=name).one_or_none()
+        if p:
+            p.params = json.dumps(clean)
+            p.updated = dt.datetime.utcnow()
+        else:
+            s.add(Profile(name=name, params=json.dumps(clean),
+                          updated=dt.datetime.utcnow()))
+        s.commit()
+    return {"ok": True, "name": name, "params": merged_params(clean)}
+
+
+def seed_profiles() -> None:
+    from .db import Profile, SessionLocal
+    with SessionLocal() as s:
+        existing = {p.name for p in s.query(Profile).all()}
+        for name, overrides in SEED_PROFILES.items():
+            if name not in existing:
+                s.add(Profile(name=name, params=json.dumps(overrides),
+                              updated=dt.datetime.utcnow()))
+        s.commit()
