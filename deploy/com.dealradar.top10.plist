@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dealradar.top10</string>
+
+    <!-- PAS DEZE 2 PADEN AAN naar waar je de map hebt uitgepakt -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/REPLACE/PATH/DealRadar-main/.venv/bin/python</string>
+        <string>/REPLACE/PATH/DealRadar-main/run_local.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/REPLACE/PATH/DealRadar-main</string>
+
+    <!-- Elke 4 dagen (in seconden) -->
+    <key>StartInterval</key>
+    <integer>345600</integer>
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Zet hier je Railway-Postgres om ook het online dashboard te vullen.
+         Laat weg voor alleen een lokale database + Excel op het bureaublad. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PNL_REGION</key>
+        <string>grote_steden</string>
+        <key>PNL_N</key>
+        <string>10</string>
+        <!-- <key>DATABASE_URL</key><string>postgresql://…railway…</string> -->
+        <!-- <key>FUNDA_CITIES</key><string>amsterdam,rotterdam,den haag,utrecht,eindhoven</string> -->
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/REPLACE/PATH/DealRadar-main/dealradar-top10.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/REPLACE/PATH/DealRadar-main/dealradar-top10.err.log</string>
+</dict>
+</plist>

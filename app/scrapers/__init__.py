@@ -7,9 +7,12 @@ import traceback
 from ..db import log_run, upsert_listings, upsert_sold
 from ..scoring import compute_scores
 from .funda_source import scrape_funda, scrape_funda_sold
+from .quickscan import quick_scan  # noqa: F401  (gebruikt door de scheduler)
+from .vastgoedveiling import scrape_vastgoedveiling
 from .veilingen import scrape_biedboek, scrape_bog_auctions, scrape_veilingnotaris
 
 SCRAPERS = {
+    "vastgoedveiling": scrape_vastgoedveiling,
     "veilingnotaris": scrape_veilingnotaris,
     "bog_auctions": scrape_bog_auctions,
     "biedboek": scrape_biedboek,
@@ -74,6 +77,14 @@ def run_all(sources=None) -> dict:
 
     scored = compute_scores()
     report["_scored"] = scored
+
+    # Telefoonmelding bij nieuwe topdeals (alleen als notificaties zijn ingesteld)
+    try:
+        from ..notify import check_and_alert, notify_enabled
+        if notify_enabled():
+            report["_alerts"] = check_and_alert()
+    except Exception as e:
+        report["_alert_error"] = str(e)[:200]
     return report
 
 

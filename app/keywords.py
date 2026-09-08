@@ -5,9 +5,21 @@ import re
 
 KEYWORD_FLAGS = {
     "flag_casco": ["casco oplevering", "casco"],
+    # Ontwikkel- én transformatiesignalen. De transformatietermen zijn in de
+    # praktijk bewezen op funda in business (kerken/scholen/kantoren die naar
+    # wonen gaan) — daar zit de grootste waardesprong.
     "flag_ontwikkeling": ["ontwikkelingsmogelijkheden", "ontwikkeling mogelijk", "ontwikkelpotentie",
                           "vergunning verleend", "vergunning aanwezig", "omgevingsvergunning",
-                          "bouwvergunning", "bestemmingsplan biedt"],
+                          "bouwvergunning", "bestemmingsplan biedt",
+                          "herontwikkeling", "herontwikkelen", "herontwikkelingskans",
+                          "herontwikkelingsmogelijkheid", "herbestemming", "herbestemmen",
+                          "transformatie", "transformeren", "transformatiepand",
+                          "transformatieobject", "transformatielocatie",
+                          "naar woningen", "tot woningen", "naar appartementen",
+                          "tot appartementen", "naar wonen", "woningbouw mogelijk",
+                          "geschikt voor woningbouw", "woonbestemming",
+                          "bestemmingswijziging", "voormalige kerk", "voormalig kerkgebouw",
+                          "voormalig kerkelijk", "voormalige school", "voormalig schoolgebouw"],
     "flag_splits_bouwkundig": ["bouwkundige splitsing", "bouwkundig splitsen"],
     "flag_splits_kadastraal": ["kadastrale splitsing", "kadastraal splitsen"],
     "flag_splitsvergunning": ["splitsingsvergunning"],

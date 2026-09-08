@@ -42,6 +42,7 @@ def _light_update(listing) -> dict | None:
             "price": float(price),
             "living_area": float(living) if living else None,
             "price_m2": round(price / living) if price and living else None,
+            "published": str(getattr(listing, "publication_date", "") or ""),
         }
     except Exception:
         return None
@@ -52,17 +53,97 @@ def _cities() -> list[str]:
     return [c.strip().lower() for c in raw.split(",") if c.strip()] or DEFAULT_CITIES
 
 
+_PROXY_INSTALLED = False
+
+
+def _install_proxy() -> None:
+    """pyfunda leest zelf geen proxy in en gebruikt twee sessie-types
+    (curl_cffi + tls_client). Om SCRAPER_PROXY écht te laten werken (nodig op
+    een datacenter-IP zoals Railway) injecteren we de proxy in beide.
+    Zonder SCRAPER_PROXY gebeurt er niets."""
+    global _PROXY_INSTALLED
+    proxy = os.getenv("SCRAPER_PROXY", "").strip()
+    if not proxy or _PROXY_INSTALLED:
+        return
+    proxies = {"http": proxy, "https": proxy}
+    try:
+        import curl_cffi.requests as _ccr
+        _orig_curl = _ccr.Session
+
+        class _CurlSession(_orig_curl):  # type: ignore
+            def __init__(self, *a, **k):
+                k.setdefault("proxies", proxies)
+                super().__init__(*a, **k)
+
+        _ccr.Session = _CurlSession
+    except Exception as e:
+        print(f"[proxy] curl_cffi-patch mislukt: {e}", flush=True)
+    try:
+        import tls_client
+        _orig_tls = tls_client.Session
+
+        class _TlsSession(_orig_tls):  # type: ignore
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                try:
+                    self.proxies = proxies
+                except Exception:
+                    pass
+
+        tls_client.Session = _TlsSession
+    except Exception as e:
+        print(f"[proxy] tls_client-patch mislukt: {e}", flush=True)
+    # ook voor de requests-gebaseerde veiling-scrapers
+    for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        os.environ[k] = proxy
+    _PROXY_INSTALLED = True
+    print(f"[proxy] actief via {proxy.split('@')[-1]}", flush=True)
+
+
+def _client_params() -> dict:
+    """HTTP-timeout + retries voor pyfunda. Kort houden zodat een geblokkeerd
+    (datacenter-)IP snel faalt i.p.v. de scrape minutenlang te laten hangen."""
+    return {
+        "timeout": int(os.getenv("FUNDA_HTTP_TIMEOUT", "15")),
+        "max_retries": int(os.getenv("FUNDA_MAX_RETRIES", "2")),
+    }
+
+
+def _city_timeout() -> float:
+    """Wall-clock deadline per stad. Voorkomt dat één stad de hele run (en de
+    scrape-lock) gijzelt als Funda het IP tarpit."""
+    return float(os.getenv("SCRAPE_CITY_TIMEOUT", "120"))
+
+
+# Foutsignalen die op blokkade/tarpit duiden (geen echte programmeerfout).
+_BLOCK_SIGNS = ("401", "403", "429", "no token", "stream", "reset",
+                "timeout", "connection", "curl:")
+
+
+def _is_block(err: Exception) -> bool:
+    s = str(err).lower()
+    return any(sig in s for sig in _BLOCK_SIGNS)
+
+
+def _city_attempts() -> int:
+    """Aantal pogingen per stad bij een blokkade-achtige fout."""
+    return max(1, int(os.getenv("SCRAPE_CITY_ATTEMPTS", "3")))
+
+
+def _cooldown(attempt: int) -> float:
+    """Exponentiële pauze: 30s, 90s, 270s… Funda's tarpit laat na een
+    afkoelperiode weer verkeer door, dus even wachten werkt beter dan doorrammen."""
+    base = float(os.getenv("SCRAPE_COOLDOWN", "30"))
+    return base * (3 ** attempt)
+
+
 def scrape_funda(sink=None, on_total=None) -> list[dict]:
     try:
         from funda import Funda
     except ImportError as e:
         raise RuntimeError("pyfunda niet geinstalleerd") from e
 
-    proxy = os.getenv("SCRAPER_PROXY", "")
-    if proxy:
-        for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-            os.environ[k] = proxy
-        print("[funda] scraper-proxy actief", flush=True)
+    _install_proxy()
 
     max_price = int(os.getenv("FUNDA_MAX_PRICE", "2000000"))
     max_price_m2 = int(os.getenv("FUNDA_MAX_PRICE_M2", "6000"))
@@ -77,51 +158,85 @@ def scrape_funda(sink=None, on_total=None) -> list[dict]:
     print(f"[funda] {len(known)} objecten al bekend in database", flush=True)
 
     items: list[dict] = []
+    attempts_max = _city_attempts()
     for city in cities:
         city_items: list[dict] = []
         status = "ok"
         skipped = 0
         already = 0
-        try:
-            print(f"[funda] start {city}...", flush=True)
-            with Funda() as client:
-                results = list(client.iter_search(city, max_price=max_price))
-                print(f"[funda] {city}: {len(results)} gevonden "
-                      f"(max EUR{max_price} / EUR{max_price_m2} per m2)", flush=True)
-                done = 0
-                for listing in results:
-                    # Al bekend? Alleen prijs bijwerken (geen detail-call, telt
-                    # niet mee voor het budget) — zo gaat het budget naar NIEUW.
-                    lu = getattr(listing, "url", "") or ""
-                    if lu and lu in known:
-                        upd = _light_update(listing)
-                        if upd:
-                            city_items.append(upd)
-                            already += 1
-                        continue
-                    if done >= max_per_city:
-                        continue
-                    pm2 = _search_price_m2(listing)
-                    if pm2 is not None and pm2 > max_price_m2:
-                        skipped += 1
-                        continue
-                    try:
-                        full = client.listing(listing.id) if listing.id else listing
-                    except Exception:
-                        full = listing
-                    time.sleep(random.uniform(delay * 0.75, delay * 1.5))
-                    d = _to_dict(full or listing)
-                    if not d:
-                        continue
-                    if d.get("price_m2") and d["price_m2"] > max_price_m2:
-                        skipped += 1
-                        continue
-                    city_items.append(d)
-                    known.add(d.get("url", ""))
-                    done += 1
-        except Exception as e:
-            status = "blocked" if "403" in str(e) else "error"
-            print(f"[funda] {city} MISLUKT: {e}", flush=True)
+        last_err: Exception | None = None
+
+        # Meerdere pogingen per stad: een blokkade is meestal tijdelijk
+        # (tarpit). Afkoelen en opnieuw proberen levert veel meer data op
+        # dan de stad meteen opgeven.
+        for attempt in range(attempts_max):
+            city_items, skipped, already = [], 0, 0
+            try:
+                print(f"[funda] start {city}"
+                      f"{f' (poging {attempt + 1}/{attempts_max})' if attempt else ''}...",
+                      flush=True)
+                deadline = time.time() + _city_timeout()
+                with Funda(**_client_params()) as client:
+                    done = 0
+                    seen = 0
+                    # Lui itereren (niet eerst list()): dan grijpt de deadline ook
+                    # als de eerste zoekpagina al hangt.
+                    for listing in client.iter_search(city, max_price=max_price):
+                        if time.time() > deadline:
+                            raise TimeoutError(f"stad-timeout {_city_timeout():.0f}s bereikt")
+                        seen += 1
+                        # Al bekend? Alleen prijs bijwerken (geen detail-call, telt
+                        # niet mee voor het budget) — zo gaat het budget naar NIEUW.
+                        lu = getattr(listing, "url", "") or ""
+                        if lu and lu in known:
+                            upd = _light_update(listing)
+                            if upd:
+                                city_items.append(upd)
+                                already += 1
+                            continue
+                        if done >= max_per_city:
+                            continue
+                        pm2 = _search_price_m2(listing)
+                        if pm2 is not None and pm2 > max_price_m2:
+                            skipped += 1
+                            continue
+                        if time.time() > deadline:   # geen nieuwe zware detail-call meer starten
+                            raise TimeoutError(f"stad-timeout {_city_timeout():.0f}s bereikt")
+                        try:
+                            full = client.listing(listing.id) if listing.id else listing
+                        except Exception:
+                            full = listing
+                        time.sleep(random.uniform(delay * 0.75, delay * 1.5))
+                        d = _to_dict(full or listing)
+                        if not d:
+                            continue
+                        if d.get("price_m2") and d["price_m2"] > max_price_m2:
+                            skipped += 1
+                            continue
+                        city_items.append(d)
+                        known.add(d.get("url", ""))
+                        done += 1
+                last_err = None
+                break        # gelukt
+            except Exception as e:
+                last_err = e
+                # Al deels data binnen? Die houden we; niet opnieuw proberen.
+                if city_items:
+                    print(f"[funda] {city}: onderbroken na {len(city_items)} objecten ({e})",
+                          flush=True)
+                    last_err = None
+                    break
+                if _is_block(e) and attempt < attempts_max - 1:
+                    wait = _cooldown(attempt)
+                    print(f"[funda] {city} geblokkeerd ({str(e)[:70]}) — "
+                          f"{wait:.0f}s afkoelen", flush=True)
+                    time.sleep(wait)
+                    continue
+                break
+
+        if last_err is not None:
+            status = "blocked" if _is_block(last_err) else "error"
+            print(f"[funda] {city} MISLUKT: {last_err}", flush=True)
             if sink:
                 try:
                     sink(city, [], status)
@@ -131,7 +246,7 @@ def scrape_funda(sink=None, on_total=None) -> list[dict]:
             continue
 
         items.extend(city_items)
-        print(f"[funda] {city} klaar — {len(city_items)} objecten "
+        print(f"[funda] {city}: {seen} gezocht — {len(city_items)} objecten "
               f"({already} bekend/prijs-update, {skipped} overgeslagen op prijs/m2) "
               f"— totaal {len(items)}", flush=True)
         if sink:
@@ -156,10 +271,7 @@ def scrape_funda_sold(sink=None, on_total=None) -> list[dict]:
     except ImportError as e:
         raise RuntimeError("pyfunda niet geinstalleerd") from e
 
-    proxy = os.getenv("SCRAPER_PROXY", "")
-    if proxy:
-        for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-            os.environ[k] = proxy
+    _install_proxy()
 
     months = int(os.getenv("BENCHMARK_MONTHS", "12"))
     # Buffer: publicatiedatum ligt vóór verkoopdatum, dus horizon iets ruimer
@@ -177,11 +289,14 @@ def scrape_funda_sold(sink=None, on_total=None) -> list[dict]:
         status = "ok"
         try:
             print(f"[funda-verkocht] start {city}...", flush=True)
-            with Funda() as client:
+            deadline = time.time() + _city_timeout()
+            with Funda(**_client_params()) as client:
                 seen_on_page = 0
                 too_old = False
                 for listing in client.iter_search(
                         city, category="sold", sort="newest", max_pages=max_pages):
+                    if time.time() > deadline:
+                        raise TimeoutError(f"stad-timeout {_city_timeout():.0f}s bereikt")
                     seen_on_page += 1
                     if seen_on_page % 15 == 0:  # pauze per resultaatpagina
                         time.sleep(random.uniform(page_delay * 0.7, page_delay * 1.4))
@@ -197,7 +312,7 @@ def scrape_funda_sold(sink=None, on_total=None) -> list[dict]:
                     print(f"[funda-verkocht] {city}: horizon bereikt "
                           f"(ouder dan {months + 4} mnd)", flush=True)
         except Exception as e:
-            status = "blocked" if "403" in str(e) else "error"
+            status = "blocked" if ("403" in str(e) or "timeout" in str(e).lower()) else "error"
             print(f"[funda-verkocht] {city} MISLUKT: {e}", flush=True)
             if sink:
                 try:
@@ -303,6 +418,7 @@ def _to_dict(listing):
             "build_year": int(pd.construction_year) if pd.construction_year else None,
             "rooms": listing.rooms.total or None,
             "energy_label": listing.energy_label or "",
+            "published": str(getattr(listing, "publication_date", "") or ""),
             "vve_monthly": vve,
             "broker": listing.broker.name if listing.broker else "",
             **analysed,

@@ -21,7 +21,7 @@ import json
 import statistics
 
 from .benchmarks import BenchmarkMap
-from .db import Listing, SessionLocal
+from .db import Listing, SessionLocal, days_on_market
 
 AUCTION_SOURCES = {"veilingnotaris", "bog_auctions", "biedboek"}
 
@@ -107,6 +107,16 @@ def score_listing(l: Listing, bm: BenchmarkMap) -> tuple[int, list[str], dict]:
         pts += 10; bd.append(f"{len(drops)}x prijsverlaging (+10)")
     elif len(drops) == 1:
         pts += 6; bd.append("prijsverlaging (+6)")
+
+    # Lang te koop = gemotiveerde verkoper. Vaak het EERSTE signaal, nog
+    # voordat de vraagprijs officieel omlaag gaat.
+    dom = days_on_market(l.published)
+    if dom is not None:
+        for cutoff, p in ((180, 12), (120, 9), (90, 6), (60, 3)):
+            if dom >= cutoff:
+                pts += p
+                bd.append(f"{dom} dagen te koop (+{p})")
+                break
 
     if l.source in AUCTION_SOURCES:
         pts += 8; bd.append("veiling — gemotiveerde verkoop (+8)")

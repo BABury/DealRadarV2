@@ -20,6 +20,28 @@ class Base(DeclarativeBase):
     pass
 
 
+def days_on_market(published: str | None) -> int | None:
+    """Dagen sinds publicatie op de bron. Hét onderhandelsignaal: een woning
+    die lang staat heeft een verkoper die wil praten — vaak nog vóór de
+    eerste prijsverlaging."""
+    if not published:
+        return None
+    raw = str(published).strip()
+    try:
+        d = dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
+            try:
+                d = dt.datetime.strptime(raw[:10], fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return None
+    days = (dt.datetime.utcnow() - d).days
+    return days if 0 <= days < 4000 else None
+
+
 class Listing(Base):
     __tablename__ = "listings"
 
@@ -54,6 +76,10 @@ class Listing(Base):
     flag_splitsvergunning: Mapped[bool] = mapped_column(Boolean, default=False)
     flag_verhuurd: Mapped[bool] = mapped_column(Boolean, default=False)
     context: Mapped[str] = mapped_column(Text, default="")
+
+    # Publicatiedatum op de bron (Funda "aangeboden sinds") -> days-on-market.
+    # Let op: verschilt van first_seen (wanneer ONZE scraper het object zag).
+    published: Mapped[str] = mapped_column(String(40), default="")
 
     auction_date: Mapped[str] = mapped_column(String(40), default="")
     photo_url: Mapped[str] = mapped_column(String(600), default="")
@@ -105,6 +131,8 @@ class Listing(Base):
                 "verhuurd": self.flag_verhuurd,
             },
             "context": self.context,
+            "published": self.published,
+            "days_on_market": days_on_market(self.published),
             "auction_date": self.auction_date,
             "photo_url": self.photo_url,
             "broker": self.broker,
@@ -174,6 +202,16 @@ class Profile(Base):
     updated: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
 
+class AlertSent(Base):
+    """Verstuurde telefoonmeldingen — voorkomt dubbele alerts per object."""
+    __tablename__ = "alerts_sent"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(Integer, index=True)
+    deal_score: Mapped[int] = mapped_column(Integer, default=0)
+    sent: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
 class ScrapeRun(Base):
     __tablename__ = "scrape_runs"
 
@@ -197,7 +235,8 @@ def init_db() -> None:
                             "photo_url": "VARCHAR(600) DEFAULT ''",
                             "bench_label": "VARCHAR(160) DEFAULT ''",
                             "bench_median": "FLOAT",
-                            "discount_pct": "FLOAT"}.items():
+                            "discount_pct": "FLOAT",
+                            "published": "VARCHAR(40) DEFAULT ''"}.items():
             if _name not in existing:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE listings ADD COLUMN {_name} {_ddl}"))

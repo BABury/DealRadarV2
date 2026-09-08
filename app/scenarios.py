@@ -21,6 +21,29 @@ REGIO_EINDHOVEN = [
     "valkenswaard", "eersel", "oirschot",
 ]
 
+# Grote steden (G40-achtig) — de focus voor liquiditeit en exit.
+GROTE_STEDEN = [
+    "amsterdam", "rotterdam", "den haag", "'s-gravenhage", "utrecht", "eindhoven",
+    "groningen", "tilburg", "almere", "breda", "nijmegen", "enschede", "haarlem",
+    "arnhem", "amersfoort", "zaanstad", "zaandam", "'s-hertogenbosch", "den bosch",
+    "zwolle", "zoetermeer", "leiden", "maastricht", "dordrecht", "delft", "venlo",
+    "deventer", "helmond", "hilversum", "alkmaar", "apeldoorn", "amstelveen",
+]
+
+# Randstad — dichtste markt, snelste doorverkoop.
+RANDSTAD = [
+    "amsterdam", "rotterdam", "den haag", "'s-gravenhage", "utrecht", "haarlem",
+    "leiden", "delft", "zoetermeer", "amstelveen", "haarlemmermeer", "hoofddorp",
+    "dordrecht", "almere", "zaandam", "zaanstad", "gouda", "alphen aan den rijn",
+    "rijswijk", "capelle aan den ijssel", "schiedam", "vlaardingen",
+]
+
+REGIONS = {
+    "grote_steden": GROTE_STEDEN,
+    "randstad": RANDSTAD,
+    "regio_eindhoven": REGIO_EINDHOVEN,
+}
+
 DEFAULT_PARAMS = {
     "ovb_pct": 8.0,          # overdrachtsbelasting beleggers/BV 2026
     "kk_vast": 6000.0,       # notaris/advies/overig
@@ -36,6 +59,10 @@ DEFAULT_PARAMS = {
     # Financiering / looptijd — nodig voor een eerlijke (netto) winst
     "rente_pct": 5.5,        # financieringsrente %/jaar over de inleg
     "looptijd_mnd": 9,       # aankoop -> verkoop, incl. verbouw
+    # Verkoopkosten (zoals in een echte development-P&L)
+    "courtage_pct": 1.25,    # verkoopcourtage % van GDV
+    "verkoop_vast": 2385.0,  # fotografie/brochure/notaris/royement e.d.
+    "doel_roi_pct": 20.0,    # doelrendement -> bepaalt het maximale bod
     # Risico-drempels voor de Top (0 = uit) — een deal moet ook conservatief lonen
     "min_conservatief": 0,   # min. conservatieve nettowinst € (na financiering)
     "min_roi_pct": 0,        # min. conservatieve ROI % op de inleg
@@ -108,18 +135,51 @@ def _motivated(listing: dict) -> tuple[float, list[str]]:
     if (listing.get("source") or "") in AUCTION_SOURCES_SC:
         factor += 0.15
         tags.append("veiling")
-    return min(factor, 1.4), tags
+    # Lang te koop = onderhandelruimte, vaak nog vóór de eerste prijsverlaging
+    dom = listing.get("days_on_market")
+    if dom is not None:
+        if dom >= 180:
+            factor += 0.18; tags.append(f"{dom}d te koop")
+        elif dom >= 90:
+            factor += 0.10; tags.append(f"{dom}d te koop")
+    return min(factor, 1.5), tags
 
 
 AUCTION_SOURCES_SC = {"veilingnotaris", "bog_auctions", "biedboek"}
 
 
+def max_bid(gdv: float, verbouw: float, p: dict, doel_roi_pct: float | None = None) -> int:
+    """Hoogste aankoopprijs waarbij het doelrendement nog gehaald wordt.
+
+    Onmisbaar bij veilingen (daar is géén vraagprijs) en bij onderhandelen:
+    het antwoord op 'tot hoever kan ik gaan?'.
+
+    Zelfde ROI-definitie als de rest van DealRadar: winst / investering.
+
+        investering  I = P*(1+ovb) + kk + verbouw
+        financiering    = I * r          (r = rente × looptijd)
+        winst           = GDV - I - I*r - verkoopkosten
+        winst / I >= doel   =>   I <= (GDV - verkoopkosten) / (1 + r + doel)
+    """
+    doel = (doel_roi_pct if doel_roi_pct is not None else p.get("doel_roi_pct", 20)) / 100
+    r = p.get("rente_pct", 0) / 100 * p.get("looptijd_mnd", 0) / 12
+    vk = gdv * p.get("courtage_pct", 0) / 100 + p.get("verkoop_vast", 0)
+    inv_max = (gdv - vk) / (1 + r + doel)
+    ruimte = inv_max - p["kk_vast"] - verbouw
+    return int(round(max(0.0, ruimte / (1 + p["ovb_pct"] / 100))))
+
+
 def scenario_table(listing: dict, params: dict, city_median: float | None) -> dict:
-    """listing: dict met price, living_area, city (to_dict() van een Listing)."""
+    """listing: dict met price, living_area, city (to_dict() van een Listing).
+
+    Zonder prijs (veiling) rekenen we alsnog door op basis van het maximale bod."""
     price = listing.get("price") or 0
     area = listing.get("living_area") or 0
-    if not price or not area:
-        return {"error": "prijs of woonoppervlak ontbreekt"}
+    if not area:
+        return {"error": "woonoppervlak ontbreekt"}
+    geen_prijs = not price
+    if geen_prijs:
+        price = 0.0
     if not city_median:
         return {"error": f"te weinig marktdata voor {listing.get('city')} (min. 3 objecten nodig)"}
 
@@ -149,9 +209,12 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
         fin_split = inv_split * rente * looptijd
         opbr_flip = area * huis_m2
         opbr_split = verkoopbaar * app_m2
-        # netto = opbrengst - investering - financiering
-        flip_mid = opbr_flip - inv_flip - fin_flip
-        split_mid = (opbr_split - inv_split - fin_split) if split_allowed else None
+        # verkoopkosten (courtage % van GDV + vaste kosten)
+        vk_flip = opbr_flip * p.get("courtage_pct", 0) / 100 + p.get("verkoop_vast", 0)
+        vk_split = opbr_split * p.get("courtage_pct", 0) / 100 + p.get("verkoop_vast", 0)
+        # netto = opbrengst - investering - financiering - verkoopkosten
+        flip_mid = opbr_flip - inv_flip - fin_flip - vk_flip
+        split_mid = (opbr_split - inv_split - fin_split - vk_split) if split_allowed else None
         jaarhuur = verkoopbaar * p["huur_m2"] * 12
         row = {
             "tier": tier,
@@ -160,13 +223,13 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
             "financiering_flip": round(fin_flip),
             "financiering_split": round(fin_split),
             "kostprijs_m2": round((inv_flip + fin_flip) / area),
-            "flip_laag": round(opbr_flip * (1 - band) - inv_flip - fin_flip),
+            "flip_laag": round(opbr_flip * (1 - band) - inv_flip - fin_flip - vk_flip),
             "flip_mid": round(flip_mid),
-            "flip_hoog": round(opbr_flip * (1 + band) - inv_flip - fin_flip),
+            "flip_hoog": round(opbr_flip * (1 + band) - inv_flip - fin_flip - vk_flip),
             "split_allowed": split_allowed,
-            "split_laag": round(opbr_split * (1 - band) - inv_split - fin_split) if split_allowed else None,
+            "split_laag": round(opbr_split * (1 - band) - inv_split - fin_split - vk_split) if split_allowed else None,
             "split_mid": round(split_mid) if split_allowed else None,
-            "split_hoog": round(opbr_split * (1 + band) - inv_split - fin_split) if split_allowed else None,
+            "split_hoog": round(opbr_split * (1 + band) - inv_split - fin_split - vk_split) if split_allowed else None,
             "bar_pct": round(jaarhuur / inv_split * 100, 1) if inv_split else None,
             "netto_pct": round(jaarhuur * (1 - p["opex_pct"] / 100) / inv_split * 100, 1)
                          if inv_split else None,
@@ -182,6 +245,9 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
         be_opbr = best_inv + (best_inv * rente * looptijd)
         mos = (best_opbr - be_opbr) / best_opbr * 100 if best_opbr else 0
         row.update({
+            "max_bod_flip": max_bid(opbr_flip, verbouw, p),
+            "max_bod_split": (max_bid(opbr_split, verbouw + p["split_kosten"], p)
+                              if split_allowed else None),
             "best_mid": round(best_mid),
             "best_laag": round(best_laag),          # conservatieve nettowinst
             "best_strategie": "splitsen" if strat == "split" else "flip",
@@ -192,6 +258,16 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
         })
         rows.append(row)
 
+    # Zonder vraagprijs (veiling) is elke "winst" fictief — die velden leggen
+    # we leeg. Wat wél klopt en bruikbaar is: het maximale bod.
+    if geen_prijs:
+        for r in rows:
+            for k in ("flip_laag", "flip_mid", "flip_hoog", "split_laag", "split_mid",
+                      "split_hoog", "best_mid", "best_laag", "roi_pct", "roi_laag_pct",
+                      "marge_pct", "bar_pct", "netto_pct"):
+                r[k] = None
+            r["best_strategie"] = "bied max"
+
     focus = next((r for r in rows if r["tier"] == p["focus_tier"]), rows[0])
     be_flip = (area * huis_m2 - basis) / area
     be_split = (verkoopbaar * app_m2 - basis - p["split_kosten"]) / area
@@ -201,6 +277,7 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
         "aankoop": {"prijs": price, "ovb": round(ovb), "all_in": round(basis),
                     "prijs_m2": round(price / area)},
         "split_allowed": split_allowed,
+        "geen_prijs": geen_prijs,
         "breakeven_flip_m2": round(be_flip),
         "breakeven_split_m2": round(be_split),
         "rows": rows,
@@ -209,13 +286,24 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
 
 
 def top_listings(profile_params: dict, cities: list[str] | None = None,
-                 n: int = 5, min_score: int = 0, rank: str = "risk") -> dict:
+                 n: int = 5, min_score: int = 0, rank: str = "risk",
+                 region: str = "grote_steden") -> dict:
     """Rangschik objecten. rank:
     'risk'  = deal_score = conservatieve nettowinst × betrouwbaarheid × motivatie (default)
     'roi'   = conservatieve ROI % op de inleg (kapitaal-efficiënt, min. moeite)
-    'winst' = ruwe mid-upside (oud gedrag)."""
+    'winst' = ruwe mid-upside (oud gedrag)
+    'nieuw' = nieuwste vondsten eerst · 'oud' = oudste eerst.
+    region: 'grote_steden' (default) | 'randstad' | 'regio_eindhoven' | 'alle',
+    of geef `cities` expliciet mee (overrulet de regio)."""
     from .db import Listing, SessionLocal
-    cities = [c.lower() for c in (cities or REGIO_EINDHOVEN)]
+    if cities:
+        city_set = {c.lower() for c in cities}
+        all_cities = False
+    elif region == "alle":
+        city_set, all_cities = set(), True
+    else:
+        city_set = {c.lower() for c in REGIONS.get(region, GROTE_STEDEN)}
+        all_cities = False
     medians = city_medians_all()
     counts = city_counts_all()
     params = merged_params(profile_params)
@@ -229,7 +317,7 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
         if min_score:
             q = q.filter(Listing.flip_score >= min_score)
         for l in q.all():
-            if (l.city or "").lower() not in cities:
+            if not all_cities and (l.city or "").lower() not in city_set:
                 continue
             # profielfilters (0 = uit)
             if params["min_area"] and l.living_area < params["min_area"]:
@@ -260,8 +348,9 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
                 continue
             if params["min_marge_pct"] and (f.get("marge_pct") or -999) < params["min_marge_pct"]:
                 continue
-            # In risico-modus tellen alleen deals die óók conservatief lonen
-            if rank in ("risk", "roi") and best_laag <= 0:
+            # Alleen deals die óók conservatief lonen. Geldt ook bij sorteren op
+            # datum: 'nieuwste eerst' moet nieuwe KANSEN tonen, geen verliesposten.
+            if rank in ("risk", "roi", "nieuw", "oud") and best_laag <= 0:
                 continue
 
             results.append({
@@ -281,19 +370,29 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
                 "bar_pct": f["bar_pct"], "kostprijs_m2": f["kostprijs_m2"],
                 "confidence": conf, "motivated": round(motiv, 2),
                 "motivated_tags": motiv_tags, "deal_score": deal_score,
+                # wanneer deze kans voor het eerst is gevonden
+                "first_seen": l.first_seen.isoformat() if l.first_seen else None,
+                "days_on_market": d.get("days_on_market"),
+                "dagen_bekend": ((dt.datetime.utcnow() - l.first_seen).days
+                                 if l.first_seen else None),
                 "breakeven_flip_m2": tab["breakeven_flip_m2"],
                 "breakeven_split_m2": tab["breakeven_split_m2"],
             })
 
     key = {"risk": lambda r: r["deal_score"],
            "roi": lambda r: (r.get("roi_laag_pct") or -999),
-           "winst": lambda r: r["best_mid"]}.get(rank, lambda r: r["deal_score"])
-    results.sort(key=key, reverse=True)
+           "winst": lambda r: r["best_mid"],
+           # nieuwste eerst / oudste eerst op moment van vinden
+           "nieuw": lambda r: (r.get("first_seen") or ""),
+           "oud": lambda r: (r.get("first_seen") or "")}.get(
+        rank, lambda r: r["deal_score"])
+    results.sort(key=key, reverse=(rank != "oud"))
     return {
         "generated": dt.datetime.utcnow().isoformat(),
         "params": params,
         "rank": rank,
-        "cities": cities,
+        "region": region if not cities else "custom",
+        "cities": sorted(city_set) if not all_cities else "alle",
         "beoordeeld": len(results),
         "top": results[:n],
     }

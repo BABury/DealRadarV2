@@ -37,6 +37,21 @@ def _run_scrape(sources: list[str] | None = None) -> dict:
         _refresh_lock.release()
 
 
+def _run_quickscan() -> dict:
+    """Snelle scan op nieuw aanbod. Gebruikt dezelfde lock als de grote
+    scrapes: nooit twee scrapes tegelijk (en de nachtrun heeft voorrang)."""
+    if not _refresh_lock.acquire(blocking=False):
+        return {"status": "overgeslagen (andere scrape bezig)"}
+    try:
+        from .scrapers import quick_scan
+        return quick_scan()
+    except Exception as e:
+        print(f"[quickscan] fout: {e}", flush=True)
+        return {"status": "error", "message": str(e)[:200]}
+    finally:
+        _refresh_lock.release()
+
+
 def _run_sold_scrape() -> dict:
     """Verkocht-scrape (benchmarks). Zelfde lock: nooit twee scrapes tegelijk."""
     import datetime as dt
@@ -68,6 +83,14 @@ async def lifespan(app: FastAPI):
     _scheduler.add_job(_run_scrape, CronTrigger(hour=hour, minute=0),
                        id="daily_scrape", max_instances=1)
     # Wekelijkse verkocht-scrape → benchmarks (verkocht-data verandert langzaam)
+    # Snelle scan op nieuw aanbod — de echte edge: goede deals zijn binnen
+    # 24-48u weg, dus we kijken elke QUICKSCAN_MINUTES minuten of er iets
+    # nieuws online staat en melden dat direct.
+    qs_min = int(os.getenv("QUICKSCAN_MINUTES", "20"))
+    if qs_min > 0:
+        _scheduler.add_job(_run_quickscan, CronTrigger(minute=f"*/{qs_min}"),
+                           id="quickscan", max_instances=1)
+
     sold_day = os.getenv("SOLD_SCRAPE_DAY", "sun")
     sold_hour = int(os.getenv("SOLD_SCRAPE_HOUR", "3"))
     _scheduler.add_job(_run_sold_scrape, CronTrigger(day_of_week=sold_day,
@@ -211,6 +234,7 @@ def scenarios_ep(listing_id: int = Query(...), profile: str = Query(default="sta
 @app.get("/api/top5")
 def top5(profile: str = Query(default="standaard"),
          cities: str = Query(default=""),
+         region: str = Query(default="grote_steden"),
          n: int = Query(default=5, le=25),
          min_score: int = Query(default=0),
          rank: str = Query(default="risk"),
@@ -230,8 +254,10 @@ def top5(profile: str = Query(default="standaard"),
         if v is not None:
             params[k] = v
     city_list = [c.strip() for c in cities.split(",") if c.strip()] or None
-    rank = rank if rank in ("risk", "roi", "winst") else "risk"
-    return top_listings(params, cities=city_list, n=n, min_score=min_score, rank=rank)
+    rank = rank if rank in ("risk", "roi", "winst", "nieuw", "oud") else "risk"
+    region = region if region in ("grote_steden", "randstad", "regio_eindhoven", "alle") else "grote_steden"
+    return top_listings(params, cities=city_list, n=n, min_score=min_score,
+                        rank=rank, region=region)
 
 
 @app.get("/api/city-stats")
@@ -259,7 +285,8 @@ def running():
 def source_status():
     with SessionLocal() as s:
         out = []
-        for src in ("funda", "funda_sold", "veilingnotaris", "bog_auctions", "biedboek"):
+        for src in ("funda", "funda_quickscan", "funda_sold", "vastgoedveiling",
+                    "veilingnotaris", "bog_auctions", "biedboek"):
             run = (s.query(ScrapeRun).filter_by(source=src)
                    .order_by(desc(ScrapeRun.started)).first())
             out.append({
@@ -279,6 +306,13 @@ def refresh(source: str = Query(default="")):
     return {"status": "gestart", "sources": sources or "alle"}
 
 
+@app.post("/api/quickscan")
+def quickscan_now():
+    """Nu direct op nieuw aanbod scannen (en melden bij een goede kans)."""
+    threading.Thread(target=_run_quickscan, daemon=True).start()
+    return {"status": "gestart", "interval_minuten": int(os.getenv("QUICKSCAN_MINUTES", "20"))}
+
+
 @app.post("/api/refresh-sold")
 def refresh_sold():
     """Verkocht-scrape nu starten (voedt de benchmarks)."""
@@ -291,6 +325,66 @@ def benchmarks_ep(city: str = Query(default="")):
     """Marktscorebord: €/m² p25/mediaan/p75 per stad × segment, incl. wijken."""
     from .benchmarks import scoreboard
     return scoreboard(city)
+
+
+@app.get("/api/export-pnl")
+def export_pnl(region: str = Query(default="grote_steden"),
+               profile: str = Query(default="standaard"),
+               rank: str = Query(default="risk"),
+               n: int = Query(default=10, le=25)):
+    """Genereer de Top-N development-P&L als Excel en bied 'm als download aan."""
+    import tempfile
+    from .export_pnl import build_pnl_workbook
+    try:
+        path = build_pnl_workbook(tempfile.mkdtemp(), region=region,
+                                  profile=profile, rank=rank, n=n)
+    except Exception as e:
+        return JSONResponse({"error": f"Export mislukt: {e}"}, status_code=502)
+    return FileResponse(path, filename=Path(path).name,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.get("/api/alerts/status")
+def alerts_status():
+    """Zijn telefoonmeldingen ingesteld, en met welke drempels?"""
+    from .notify import notify_enabled
+    return {
+        "ingesteld": notify_enabled(),
+        "kanalen": {
+            "telegram": bool(os.getenv("TELEGRAM_TOKEN") and os.getenv("TELEGRAM_CHAT_ID")),
+            "pushover": bool(os.getenv("PUSHOVER_TOKEN") and os.getenv("PUSHOVER_USER")),
+            "email": bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER")),
+        },
+        "drempels": {
+            "min_winst": float(os.getenv("ALERT_MIN_PROFIT", "50000")),
+            "min_roi_pct": float(os.getenv("ALERT_MIN_ROI", "15")),
+            "regio": os.getenv("ALERT_REGION", "grote_steden"),
+        },
+    }
+
+
+@app.post("/api/alerts/test")
+def alerts_test():
+    """Stuur een testmelding naar je telefoon."""
+    from .notify import notify_enabled, send_email, send_pushover, send_telegram
+    if not notify_enabled():
+        return JSONResponse(
+            {"error": "Geen meldingskanaal ingesteld. Zet TELEGRAM_TOKEN + "
+                      "TELEGRAM_CHAT_ID (of PUSHOVER_*/SMTP_*) als variabelen."},
+            status_code=400)
+    txt = "✅ DealRadar testmelding — je meldingen werken."
+    ok = False
+    ok |= send_telegram(f"<b>DealRadar</b>\n{txt}")
+    ok |= send_pushover("DealRadar", txt)
+    ok |= send_email("DealRadar testmelding", txt)
+    return {"verstuurd": ok}
+
+
+@app.post("/api/alerts/run")
+def alerts_run(region: str = Query(default=""), limit: int = Query(default=25, le=50)):
+    """Controleer nu op nieuwe topdeals en meld ze."""
+    from .notify import check_and_alert
+    return check_and_alert(region=region, limit=limit)
 
 
 @app.post("/api/rescore")

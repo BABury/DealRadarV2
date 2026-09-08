@@ -133,12 +133,20 @@
 
   <div class="card" style="margin-bottom:18px;" id="top5-card">
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-      <b style="white-space:nowrap;">🏆 Top 5 — regio Eindhoven</b>
+      <b style="white-space:nowrap;" id="top5-title">🏆 Top 5 — grote steden</b>
+      <select id="p-region" onchange="loadTop5()" title="Welke regio">
+        <option value="grote_steden">🏙 grote steden</option>
+        <option value="randstad">🌆 Randstad</option>
+        <option value="regio_eindhoven">📍 regio Eindhoven</option>
+        <option value="alle">🇳🇱 alle steden</option>
+      </select>
       <select id="p-profile" onchange="onProfileChange()"></select>
       <select id="p-rank" onchange="loadTop5()" title="Waarop rangschikken">
         <option value="risk">🛡 risico-gecorrigeerd</option>
         <option value="roi">📈 rendement (ROI)</option>
         <option value="winst">💰 ruwe winst</option>
+        <option value="nieuw">🆕 nieuwste eerst</option>
+        <option value="oud">🕗 oudste eerst</option>
       </select>
       <button onclick="loadTop5()">Ververs</button>
       <button onclick="toggleAannames()" style="opacity:.8;">Aannames &amp; filters ▾</button>
@@ -471,7 +479,11 @@ async function loadTop5() {
   el.innerHTML = '<span class="muted">Doorrekenen…</span>';
   try {
     const rank = document.getElementById("p-rank").value;
-    const r = await (await fetch("/api/top5?n=5&rank=" + rank + "&profile=" + encodeURIComponent(curProfile()))).json();
+    const region = document.getElementById("p-region").value;
+    const regionLbl = {grote_steden: "grote steden", randstad: "Randstad",
+                       regio_eindhoven: "regio Eindhoven", alle: "alle steden"}[region] || region;
+    document.getElementById("top5-title").textContent = "🏆 Top 5 — " + regionLbl;
+    const r = await (await fetch("/api/top5?n=5&region=" + region + "&rank=" + rank + "&profile=" + encodeURIComponent(curProfile()))).json();
     const fl = [];
     if (r.params.min_area) fl.push(`≥${r.params.min_area} m²`);
     if (r.params.max_area) fl.push(`≤${r.params.max_area} m²`);
@@ -479,7 +491,9 @@ async function loadTop5() {
     if (r.params.max_price) fl.push(`≤${fmt(r.params.max_price)}`);
     if (r.params.max_price_m2) fl.push(`≤${fmt(r.params.max_price_m2)}/m²`);
     const rankLbl = {risk: "risico-gecorrigeerd (netto, ná financiering)",
-                     roi: "rendement (ROI)", winst: "ruwe mid-winst"}[rank] || rank;
+                     roi: "rendement (ROI)", winst: "ruwe mid-winst",
+                     nieuw: "nieuwste vondsten eerst",
+                     oud: "oudste vondsten eerst"}[rank] || rank;
     document.getElementById("top5-meta").textContent =
       `${r.beoordeeld} deals na risico-filter · gerangschikt op ${rankLbl} · focus €${r.params.focus_tier}/m² verbouw · profiel "${curProfile()}"` +
       (fl.length ? ` · filters: ${fl.join(" · ")}` : "");
@@ -494,8 +508,25 @@ async function loadTop5() {
       const conf = o.confidence != null ? Math.round(o.confidence * 100) : null;
       const confCol = conf >= 80 ? "var(--accent)" : conf >= 60 ? "#c9a227" : "var(--hot)";
       const badges = [];
+      // Wanneer is deze kans gevonden?
+      if (o.dagen_bekend != null) {
+        const d = o.dagen_bekend;
+        const tekst = d === 0 ? "🆕 vandaag gevonden" : d === 1 ? "🆕 gisteren gevonden"
+                    : d <= 7 ? `${d} dagen geleden gevonden` : `${d} dagen in de lijst`;
+        const kleur = d <= 1 ? "var(--accent)" : d <= 7 ? "inherit" : "var(--mut,#888)";
+        const datum = o.first_seen ? new Date(o.first_seen).toLocaleDateString("nl-NL") : "";
+        badges.push(`<span style="color:${kleur}" title="gevonden op ${datum}">${tekst}</span>`);
+      }
+      // Lang te koop = onderhandelruimte
+      if (o.days_on_market != null && o.days_on_market >= 60) {
+        const dm = o.days_on_market;
+        const c2 = dm >= 180 ? "var(--accent)" : "#c9a227";
+        badges.push(`<span style="color:${c2}" title="lang te koop = onderhandelruimte">🕰 ${dm}d te koop</span>`);
+      }
       if (o.split_allowed === false) badges.push('<span title="niet splitsbaar — alleen flip" style="opacity:.7;">flip-only</span>');
-      (o.motivated_tags || []).forEach(t => badges.push(`<span style="color:var(--accent)">🔥 ${t}</span>`));
+      // 'te koop'-tag heeft al een eigen badge hierboven — niet dubbel tonen
+      (o.motivated_tags || []).filter(t => !/te koop/.test(t))
+        .forEach(t => badges.push(`<span style="color:var(--accent)">🔥 ${t}</span>`));
       if (conf != null) badges.push(`<span style="color:${confCol}" title="databetrouwbaarheid">${conf}% zeker</span>`);
       return `<div style="display:flex; gap:12px; align-items:center; padding:9px 6px; border-bottom:1px solid var(--border); cursor:pointer;"
                    onclick="document.getElementById('f-q').value='${(o.address || "").replace(/'/g, "")}';document.getElementById('f-score').value=0;document.getElementById('f-score-v').textContent=0;load();">
@@ -530,7 +561,8 @@ async function loadScenarios(id) {
         <td style="color:${c(x.flip_mid)}">${fmt(x.flip_laag)} … ${fmt(x.flip_hoog)}</td>
         <td style="color:${c(x.split_mid)}">${fmt(x.split_laag)} … ${fmt(x.split_hoog)}</td>
         <td>${x.bar_pct != null ? x.bar_pct + "% / " + x.netto_pct + "%" : "–"}</td>
-        <td><b style="color:${c(x.best_mid)}">${x.best_mid >= 0 ? "▲" : "▼"} ${x.best_strategie}</b></td>
+        <td title="hoogste aankoopprijs waarbij het doelrendement nog gehaald wordt"><b>${fmt(x.max_bod_flip)}</b></td>
+        <td><b style="color:${c(x.best_mid)}">${x.best_mid == null ? "—" : (x.best_mid >= 0 ? "▲" : "▼")} ${x.best_strategie}</b></td>
       </tr>`;
     }).join("");
     el.innerHTML = `
@@ -541,7 +573,8 @@ async function loadScenarios(id) {
         break-even verbouwbudget: flip ${fmt(r.breakeven_flip_m2)}/m², splitsen ${fmt(r.breakeven_split_m2)}/m²</span>
       <table style="margin-top:8px; font-size:13px;">
         <thead><tr><th>Verbouw</th><th>Investering</th><th>Kostprijs/m²</th>
-          <th>Flip (laag…hoog)</th><th>Splitsen (laag…hoog)</th><th>BAR/netto</th><th>Verdict</th></tr></thead>
+          <th>Flip (laag…hoog)</th><th>Splitsen (laag…hoog)</th><th>BAR/netto</th>
+          <th>Max. bod (${r.aannames.doel_roi_pct}% ROI)</th><th>Verdict</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`;
   } catch (e) {
     el.innerHTML = '<span class="muted">Scenario’s laden mislukt.</span>';
