@@ -96,7 +96,7 @@
       <div class="card"><b>Groot perceel</b> <span style="float:right;color:var(--accent)">tot 12 pt</span><div class="muted">Woning ≥80 m² op perceel ≥5× woonoppervlak = 12 · ≥3× = 8 · ≥2× = 4. Bijbouw-/uitbouwpotentie: vergunningvrij bouwen schaalt mee met het bebouwingsgebied.</div></div>
       <div class="card"><b>Energielabel</b> <span style="float:right;color:var(--accent)">tot 15 pt</span><div class="muted">G = 15 · F = 12 · E = 9 · D = 5 · C = 2. Slecht label = renovatiekans + vaak gemotiveerde verkoper.</div></div>
       <div class="card"><b>Verbouwkansen in tekst</b> <span style="float:right;color:var(--accent)">tot 20 pt</span><div class="muted">Casco (+8), verbouwkans (+5), ontwikkelkans (+4), dakopbouw (+4), uitbreiden (+3) — stapelbaar tot 20. Herkend uit de omschrijving.</div></div>
-      <div class="card"><b>Splitsbaar</b> <span style="float:right;color:var(--accent)">tot 15 pt</span><div class="muted">Splitsingsvergunning aanwezig = 15 · bouwkundig/kadastraal splitsbaar genoemd = 10. Splitsen is de grootste waardesprong.</div></div>
+      <div class="card"><b>Splitsbaar</b> <span style="float:right;color:var(--accent)">tot 15 pt</span><div class="muted">Splitsingsvergunning = 15 · splitsen genoemd in advertentie = 12 · berekende potentie: ≥3 appartementen = 10, 2 appartementen = 6. Potentie = oppervlak ÷ min. appartementgrootte (na 10% verkeersruimte), alleen voor geschikte types — geen vergunning, check altijd de gemeente. Splitsen is de grootste waardesprong.</div></div>
       <div class="card"><b>Onderhoudsstaat</b> <span style="float:right;color:var(--accent)">tot 10 pt</span><div class="muted">Slecht = 10 · matig = 6. Uit de omschrijving gehaald ("achterstallig onderhoud", "opknapper").</div></div>
       <div class="card"><b>Bouwjaar</b> <span style="float:right;color:var(--accent)">tot 10 pt</span><div class="muted">Vóór 1930 = 10 · vóór 1950 = 7 · vóór 1970 = 4. Oud = verbeterpotentieel.</div></div>
       <div class="card"><b>Prijsverlagingen</b> <span style="float:right;color:var(--accent)">tot 10 pt</span><div class="muted">2x of vaker verlaagd = 10 · 1x = 6. Automatisch bijgehouden per dagelijkse scrape — hét signaal van een gemotiveerde verkoper.</div></div>
@@ -159,7 +159,7 @@
         <label>Uplift gerenoveerd (×stadsmediaan)<input type="number" id="pp-renov_uplift" step="0.01"></label>
         <label>Appartement-premie (×woning)<input type="number" id="pp-app_premium" step="0.01"></label>
         <label>Overdrachtsbelasting %<input type="number" id="pp-ovb_pct" step="0.1"></label>
-        <label>Splitsingskosten €<input type="number" id="pp-split_kosten" step="1000"></label>
+        <label>Splitskosten vast €<input type="number" id="pp-split_kosten" step="1000"></label>
         <label>Huur €/m²/mnd<input type="number" id="pp-huur_m2" step="0.5"></label>
         <label>Exploitatiekosten %<input type="number" id="pp-opex_pct" step="1"></label>
         <label>Waardeband ± (0.06 = 6%)<input type="number" id="pp-waarde_band" step="0.01"></label>
@@ -171,6 +171,15 @@
         <label>Min. vraagprijs €<input type="number" id="pp-min_price" step="10000"></label>
         <label>Max. vraagprijs €<input type="number" id="pp-max_price" step="10000"></label>
         <label>Max. aankoopprijs €/m²<input type="number" id="pp-max_price_m2" step="100"></label>
+        <label>Min. conservatieve winst €<input type="number" id="pp-min_conservatief" step="10000"></label>
+      </div>
+      <div style="margin-top:10px; font-size:13px;"><b>🏢 Splitsen</b> <span class="muted">(je hoofdstrategie — hoeveel appartementen passen erin, en wat kost dat)</span></div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; font-size:13px; margin-top:6px;">
+        <label>Alleen splitsbaar (1 = ja)<input type="number" id="pp-alleen_splitsbaar" min="0" max="1" step="1"></label>
+        <label>Min. aantal appartementen<input type="number" id="pp-min_units" min="0" step="1"></label>
+        <label>Min. appartement m² (gemeente!)<input type="number" id="pp-min_app_m2" step="5"></label>
+        <label>Splitskosten per extra app. €<input type="number" id="pp-split_per_unit" step="1000"></label>
+        <label>Verkeersruimte bij splitsen %<input type="number" id="pp-go_verlies_pct" step="1"></label>
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <button onclick="saveProfile(false)">Opslaan in dit profiel</button>
@@ -418,7 +427,9 @@ async function runAnalyse() {
 let profilesCache = [];
 const PP_FIELDS = ["focus_tier","renov_uplift","app_premium","ovb_pct",
                    "split_kosten","huur_m2","opex_pct","waarde_band",
-                   "min_area","max_area","min_price","max_price","max_price_m2"];
+                   "min_area","max_area","min_price","max_price","max_price_m2",
+                   "min_conservatief","alleen_splitsbaar","min_units","min_app_m2",
+                   "split_per_unit","go_verlies_pct"];
 
 async function purgeDemo() {
   if (!confirm("Alle demo-objecten definitief verwijderen?")) return;
@@ -508,6 +519,15 @@ async function loadTop5() {
       const conf = o.confidence != null ? Math.round(o.confidence * 100) : null;
       const confCol = conf >= 80 ? "var(--accent)" : conf >= 60 ? "#c9a227" : "var(--hot)";
       const badges = [];
+      // Splitsen = hoofdstrategie: aantal appartementen + zekerheid vooraan
+      if (o.split_status && o.split_status !== "nee") {
+        const zeker = {vergunning: ["✅", "var(--accent)", "splitsingsvergunning"],
+                       genoemd: ["🏢", "var(--accent)", "splitsen genoemd"],
+                       potentieel: ["🏢", "#c9a227", "potentieel — check gemeente"]}[o.split_status];
+        const pre = o.split_status === "potentieel" ? "~" : "";
+        badges.push(`<span style="color:${zeker[1]}; font-weight:600" title="${(o.split_reden || "").replace(/"/g, "")}">`
+          + `${zeker[0]} ${pre}${o.units} app. à ±${o.unit_m2} m² · ${zeker[2]}</span>`);
+      }
       // Wanneer is deze kans gevonden?
       if (o.dagen_bekend != null) {
         const d = o.dagen_bekend;
@@ -571,6 +591,11 @@ async function loadScenarios(id) {
         woning na renovatie ${fmt(r.aannames.huis_m2)}/m² · appartement ${fmt(r.aannames.app_m2)}/m² ·
         all-in aankoop ${fmt(r.aankoop.all_in)} (incl. ${fmt(r.aankoop.ovb)} OVB) ·
         break-even verbouwbudget: flip ${fmt(r.breakeven_flip_m2)}/m², splitsen ${fmt(r.breakeven_split_m2)}/m²</span>
+      ${r.split && r.split.status !== "nee"
+        ? `<div style="margin-top:4px; font-size:12px;"><b>🏢 Splitsen:</b> ${r.split.units} appartementen à ±${r.split.unit_m2} m²
+           (${r.split.status}) · splitskosten ${fmt(r.split.kosten)} · appartement-premie ${r.split.premie}×
+           <span class="muted">(${r.split.premie_bron})</span></div>`
+        : `<div class="muted" style="margin-top:4px; font-size:12px;">🏢 Niet splitsbaar: ${r.split ? r.split.reden : ""}</div>`}
       <table style="margin-top:8px; font-size:13px;">
         <thead><tr><th>Verbouw</th><th>Investering</th><th>Kostprijs/m²</th>
           <th>Flip (laag…hoog)</th><th>Splitsen (laag…hoog)</th><th>BAR/netto</th>

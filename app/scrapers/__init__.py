@@ -1,11 +1,14 @@
 """Scraper-registry. Funda schrijft per stad weg (incrementeel)."""
 from __future__ import annotations
 
+import os
 import threading
 import traceback
 
 from ..db import log_run, upsert_listings, upsert_sold
+from ..property_filter import filter_items
 from ..scoring import compute_scores
+from .funda_browser import scrape_funda_browser
 from .funda_source import scrape_funda, scrape_funda_sold
 from .quickscan import quick_scan  # noqa: F401  (gebruikt door de scheduler)
 from .vastgoedveiling import scrape_vastgoedveiling
@@ -27,7 +30,10 @@ def run_all(sources=None) -> dict:
     with _lock:
         PROGRESS.clear()
 
-    if not sources or "funda" in sources:
+    # Op Railway uitzetten (FUNDA_ENABLED=0): Funda blokkeert datacenter-IP's en
+    # vereist een echte browser — dat doet de lokale scraper op je Mac.
+    funda_aan = os.getenv("FUNDA_ENABLED", "1") != "0"
+    if funda_aan and (not sources or "funda" in sources):
         fu = {"cities_total": 0, "cities_done": 0, "found": 0, "new": 0,
               "ok_cities": 0, "current": "", "per_city": {}}
         with _lock:
@@ -40,6 +46,7 @@ def run_all(sources=None) -> dict:
                 fu["per_city"][city] = {"status": status, "found": len(city_items)}
                 if status == "ok":
                     fu["ok_cities"] += 1
+            city_items = filter_items(city_items, f"funda/{city}")
             if city_items:
                 new, _ = upsert_listings(city_items)
                 with _lock:
@@ -51,8 +58,13 @@ def run_all(sources=None) -> dict:
             with _lock:
                 fu["cities_total"] = n
 
+        # Funda's mobiele API (pyfunda) wordt sinds sept 2026 geblokkeerd;
+        # de browser-variant komt er wél langs. Terug naar de API kan met
+        # FUNDA_METHOD=api.
+        scraper = (scrape_funda if os.getenv("FUNDA_METHOD", "browser") == "api"
+                   else scrape_funda_browser)
         try:
-            all_items = scrape_funda(sink=sink, on_total=set_total)
+            all_items = scraper(sink=sink, on_total=set_total)
             status = "ok" if fu["ok_cities"] > 0 else "error"
             msg = "" if status == "ok" else "Alle steden geblokkeerd (403) - zet SCRAPER_PROXY."
             log_run("funda", status, found=len(all_items), new=fu["new"], message=msg)
@@ -63,14 +75,25 @@ def run_all(sources=None) -> dict:
             log_run("funda", "error", message=f"{e}\n{traceback.format_exc()[:400]}")
             report["funda"] = {"status": "error", "message": str(e)[:200]}
 
+    # Bronnen uitzetten die voor jouw doel niets opleveren, bv.
+    # DISABLE_SOURCES="bog_auctions,veilingnotaris" (bedrijfspanden).
+    uit = {s.strip().lower() for s in
+           os.getenv("DISABLE_SOURCES", "").split(",") if s.strip()}
+
     for name, fn in SCRAPERS.items():
         if sources and name not in sources:
             continue
+        if name in uit and not (sources and name in sources):
+            print(f"[{name}] overgeslagen (DISABLE_SOURCES)", flush=True)
+            continue
         try:
             items = fn()
+            gevonden = len(items)
+            items = filter_items(items, name)
             new, updated = upsert_listings(items)
-            log_run(name, "ok", found=len(items), new=new)
-            report[name] = {"status": "ok", "found": len(items), "new": new, "updated": updated}
+            log_run(name, "ok", found=gevonden, new=new)
+            report[name] = {"status": "ok", "found": gevonden, "woningen": len(items),
+                            "new": new, "updated": updated}
         except Exception as e:
             log_run(name, "error", message=f"{e}\n{traceback.format_exc()[:400]}")
             report[name] = {"status": "error", "message": str(e)[:200]}

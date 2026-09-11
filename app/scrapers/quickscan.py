@@ -19,6 +19,7 @@ import random
 import time
 
 from ..db import log_run, upsert_listings
+from ..property_filter import filter_items
 from ..scoring import compute_scores
 from .funda_source import (_cities, _city_timeout, _client_params, _install_proxy,
                            _is_block, _known_urls, _to_dict)
@@ -91,6 +92,7 @@ def quick_scan(sink=None) -> dict:
             continue
 
     toegevoegd = 0
+    nieuw = filter_items(nieuw, "quickscan")
     if nieuw:
         toegevoegd, _ = upsert_listings(nieuw)
         compute_scores()

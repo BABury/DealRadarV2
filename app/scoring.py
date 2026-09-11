@@ -20,8 +20,15 @@ from __future__ import annotations
 import json
 import statistics
 
+import os
+
 from .benchmarks import BenchmarkMap
 from .db import Listing, SessionLocal, days_on_market
+from .split import analyse as split_analyse
+
+# Moeten gelijk lopen met min_app_m2 / go_verlies_pct in scenarios.DEFAULT_PARAMS
+SPLIT_MIN_APP_M2 = float(os.getenv("SPLIT_MIN_APP_M2", "50"))
+SPLIT_VERKEER_PCT = float(os.getenv("SPLIT_VERKEER_PCT", "10"))
 
 AUCTION_SOURCES = {"veilingnotaris", "bog_auctions", "biedboek"}
 
@@ -96,10 +103,16 @@ def score_listing(l: Listing, bm: BenchmarkMap) -> tuple[int, list[str], dict]:
     if not l.erfpacht:
         pts += 5; bd.append("geen erfpacht (+5)")
 
-    if l.flag_splitsvergunning:
-        pts += 15; bd.append("splitsingsvergunning (+15)")
-    elif l.flag_splits_bouwkundig or l.flag_splits_kadastraal:
-        pts += 10; bd.append("splitsbaar (+10)")
+    # Splitsen = de grootste waardesprong. Naast wat de advertentie zegt, ook
+    # de fysieke potentie: hoeveel appartementen passen er in het oppervlak?
+    sa = split_analyse(l.to_dict(), SPLIT_MIN_APP_M2, SPLIT_VERKEER_PCT)
+    if sa["status"] == "vergunning":
+        pts += 15; bd.append(f"splitsingsvergunning, {sa['units']} app. (+15)")
+    elif sa["status"] == "genoemd":
+        pts += 12; bd.append(f"splitsbaar volgens advertentie, {sa['units']} app. (+12)")
+    elif sa["status"] == "potentieel":
+        p = 10 if sa["units"] >= 3 else 6
+        pts += p; bd.append(f"splitspotentie ~{sa['units']} app. (+{p})")
 
     hist = json.loads(l.price_history or "[]")
     drops = [h for h in hist if h.get("to", 0) < h.get("from", 0)]

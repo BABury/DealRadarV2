@@ -15,6 +15,8 @@ import datetime as dt
 import json
 import statistics
 
+from .split import analyse as split_analyse
+
 REGIO_EINDHOVEN = [
     "eindhoven", "veldhoven", "nuenen", "waalre", "best", "geldrop",
     "mierlo", "geldrop-mierlo", "son en breugel", "helmond",
@@ -52,8 +54,12 @@ DEFAULT_PARAMS = {
     "renov_uplift": 1.12,    # gerenoveerd t.o.v. stadsmediaan €/m²
     "app_premium": 1.12,     # appartement-premie t.o.v. woning €/m²
     "waarde_band": 0.06,     # ± band om de waarde (laag/hoog)
-    "split_kosten": 30000.0, # leges, akte, VvE, advies
-    "go_verlies_pct": 3.0,   # verlies verkoopbaar oppervlak bij splitsing
+    # Splitsen — de hoofdstrategie. Kosten schalen met het aantal appartementen.
+    "split_kosten": 15000.0,     # vast: leges, splitsingsakte, VvE-oprichting, advies
+    "split_per_unit": 20000.0,   # per EXTRA appartement: keuken, badkamer,
+                                 # meterkast, brand- en geluidsscheiding
+    "go_verlies_pct": 10.0,      # verkeersruimte (trappenhuis, entrees) bij splitsen
+    "min_app_m2": 50,            # minimale appartementgrootte (check gemeente!)
     "huur_m2": 20.0,         # kale huur €/m²/maand
     "opex_pct": 25.0,        # exploitatiekosten verhuur
     # Financiering / looptijd — nodig voor een eerlijke (netto) winst
@@ -73,6 +79,8 @@ DEFAULT_PARAMS = {
     "min_price": 0,          # minimale vraagprijs €
     "max_price": 0,          # maximale vraagprijs €
     "max_price_m2": 0,       # maximale aankoopprijs €/m²
+    "alleen_splitsbaar": 0,  # 1 = alleen objecten die in appartementen kunnen
+    "min_units": 0,          # minimaal aantal appartementen na splitsing
 }
 
 SEED_PROFILES = {
@@ -169,7 +177,39 @@ def max_bid(gdv: float, verbouw: float, p: dict, doel_roi_pct: float | None = No
     return int(round(max(0.0, ruimte / (1 + p["ovb_pct"] / 100))))
 
 
-def scenario_table(listing: dict, params: dict, city_median: float | None) -> dict:
+PREMIE_MIN_N = 5          # min. aantal objecten per segment om marktdata te vertrouwen
+PREMIE_PLAFOND = 1.40     # nooit meer dan 40% meer per m² aannemen
+
+
+def split_premie(bm, listing: dict, area: float, unit_m2: float,
+                 p: dict) -> tuple[float, str]:
+    """Meerprijs per m² van de appartementen t.o.v. het hele huis.
+
+    Dit ís de splitswinst: kleine appartementen verkopen voor meer per m² dan
+    grote huizen. We halen die verhouding uit de marktdata per grootte-segment
+    (bv. 'midden' 50-100 m² vs 'groot' >100 m²) in dezelfde stad/wijk. Te weinig
+    data -> de vaste aanname uit het profiel.
+    Het profiel schaalt de marktpremie mee (conservatief = voorzichtiger)."""
+    vast = p["app_premium"]
+    if bm is None:
+        return vast, "aanname"
+    args = (listing.get("city"), listing.get("neighbourhood"), listing.get("postcode"))
+    huis, _ = bm.lookup(*args, area)
+    app, label = bm.lookup(*args, unit_m2)
+    if not (huis and app and huis.median and app.median) or huis is app:
+        return vast, "aanname"
+    if huis.n < PREMIE_MIN_N or app.n < PREMIE_MIN_N:
+        return vast, f"aanname (markt te dun: n={huis.n}/{app.n})"
+    markt = app.median / huis.median
+    # profiel-schaal: standaard (1.12) = pure markt, conservatief (1.08) = 2/3
+    schaal = (vast - 1) / 0.12 if vast > 1 else 1.0
+    premie = 1 + (markt - 1) * schaal
+    premie = max(1.0, min(PREMIE_PLAFOND, premie))
+    return round(premie, 3), f"markt {app.median:,.0f}/{huis.median:,.0f} €/m² ({label})"
+
+
+def scenario_table(listing: dict, params: dict, city_median: float | None,
+                   bm=None) -> dict:
     """listing: dict met price, living_area, city (to_dict() van een Listing).
 
     Zonder prijs (veiling) rekenen we alsnog door op basis van het maximale bod."""
@@ -185,17 +225,20 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
 
     p = params
     huis_m2 = city_median * p["renov_uplift"]
-    app_m2 = huis_m2 * p["app_premium"]
     band = p["waarde_band"]
     ovb = price * p["ovb_pct"] / 100
     basis = price + ovb + p["kk_vast"]
     verkoopbaar = area * (1 - p["go_verlies_pct"] / 100)
 
-    # Splitsen alleen als het object daadwerkelijk splitsbaar is (of expliciet
-    # vrijgegeven). Zo verdwijnt fictieve splitswinst op niet-splitsbare panden.
-    flags = listing.get("flags") or {}
-    split_allowed = bool(flags.get("splitsvergunning") or flags.get("splits_bouwkundig")
-                         or flags.get("splits_kadastraal")) if listing.get("flags") is not None else True
+    # Splitsanalyse: hoeveel appartementen, en hoe zeker (vergunning > genoemd >
+    # potentieel). Kosten schalen met het aantal eenheden.
+    sa = split_analyse(listing, p.get("min_app_m2", 50), p["go_verlies_pct"])
+    split_allowed = sa["status"] != "nee"
+    units = sa["units"]
+    split_kosten = p["split_kosten"] + p.get("split_per_unit", 0) * max(0, units - 1)
+    premie, premie_bron = (split_premie(bm, listing, area, sa["unit_m2"], p)
+                           if split_allowed else (p["app_premium"], "n.v.t."))
+    app_m2 = huis_m2 * premie
 
     rente = p.get("rente_pct", 5.5) / 100
     looptijd = p.get("looptijd_mnd", 9) / 12.0
@@ -204,7 +247,7 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
     for tier in p["tiers"]:
         verbouw = tier * area
         inv_flip = basis + verbouw
-        inv_split = inv_flip + p["split_kosten"]
+        inv_split = inv_flip + split_kosten
         fin_flip = inv_flip * rente * looptijd      # financieringskosten (holding)
         fin_split = inv_split * rente * looptijd
         opbr_flip = area * huis_m2
@@ -246,7 +289,7 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
         mos = (best_opbr - be_opbr) / best_opbr * 100 if best_opbr else 0
         row.update({
             "max_bod_flip": max_bid(opbr_flip, verbouw, p),
-            "max_bod_split": (max_bid(opbr_split, verbouw + p["split_kosten"], p)
+            "max_bod_split": (max_bid(opbr_split, verbouw + split_kosten, p)
                               if split_allowed else None),
             "best_mid": round(best_mid),
             "best_laag": round(best_laag),          # conservatieve nettowinst
@@ -270,13 +313,16 @@ def scenario_table(listing: dict, params: dict, city_median: float | None) -> di
 
     focus = next((r for r in rows if r["tier"] == p["focus_tier"]), rows[0])
     be_flip = (area * huis_m2 - basis) / area
-    be_split = (verkoopbaar * app_m2 - basis - p["split_kosten"]) / area
+    be_split = (verkoopbaar * app_m2 - basis - split_kosten) / area
     return {
         "aannames": {**p, "stadsmediaan_m2": round(city_median),
-                     "huis_m2": round(huis_m2), "app_m2": round(app_m2)},
+                     "huis_m2": round(huis_m2), "app_m2": round(app_m2),
+                     "split_premie": premie, "split_premie_bron": premie_bron},
         "aankoop": {"prijs": price, "ovb": round(ovb), "all_in": round(basis),
                     "prijs_m2": round(price / area)},
         "split_allowed": split_allowed,
+        "split": {**sa, "kosten": round(split_kosten), "premie": premie,
+                  "premie_bron": premie_bron},
         "geen_prijs": geen_prijs,
         "breakeven_flip_m2": round(be_flip),
         "breakeven_split_m2": round(be_split),
@@ -306,6 +352,8 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
         all_cities = False
     medians = city_medians_all()
     counts = city_counts_all()
+    from .benchmarks import BenchmarkMap
+    bm = BenchmarkMap()      # één keer laden; nodig voor de splits-premie
     params = merged_params(profile_params)
 
     results = []
@@ -331,15 +379,27 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
             if params["max_price_m2"] and (l.price_m2 or 0) > params["max_price_m2"]:
                 continue
             d = l.to_dict()
-            tab = scenario_table(d, params, medians.get((l.city or "").lower()))
+            tab = scenario_table(d, params, medians.get((l.city or "").lower()), bm)
             if "error" in tab:
                 continue
             f = tab["focus"]
+            sa = tab["split"]
+
+            # Splitsen is de hoofdstrategie: optioneel alleen splitsbare objecten
+            if params.get("alleen_splitsbaar") and not tab["split_allowed"]:
+                continue
+            if params.get("min_units") and sa["units"] < params["min_units"]:
+                continue
 
             conf = _confidence(counts.get((l.city or "").lower(), 0), d)
             motiv, motiv_tags = _motivated(d)
             best_laag = f.get("best_laag", f["best_mid"])
-            deal_score = round(max(0, best_laag) * conf * motiv)
+            deal_score = max(0, best_laag) * conf * motiv
+            # Splitswinst weegt mee naar zekerheid: een vergunning is geld waard,
+            # 'potentieel' betekent dat de gemeente nog akkoord moet geven.
+            if f["best_strategie"] == "splitsen":
+                deal_score *= sa["zekerheid"]
+            deal_score = round(deal_score)
 
             # Risico-drempels (0 = uit)
             if params["min_conservatief"] and best_laag < params["min_conservatief"]:
@@ -364,6 +424,10 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
                 "best_mid": f["best_mid"], "best_laag": best_laag,
                 "best_strategie": f["best_strategie"],
                 "split_allowed": tab.get("split_allowed", True),
+                "units": sa["units"], "split_status": sa["status"],
+                "split_reden": sa["reden"], "unit_m2": sa["unit_m2"],
+                "split_kosten": sa["kosten"], "split_premie": sa["premie"],
+                "split_premie_bron": sa["premie_bron"],
                 "flip_mid": f["flip_mid"], "split_mid": f.get("split_mid"),
                 "roi_pct": f.get("roi_pct"), "roi_laag_pct": f.get("roi_laag_pct"),
                 "marge_pct": f.get("marge_pct"), "financiering": f.get("financiering_flip"),

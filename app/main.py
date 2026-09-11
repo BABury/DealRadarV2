@@ -228,7 +228,9 @@ def scenarios_ep(listing_id: int = Query(...), profile: str = Query(default="sta
             return JSONResponse({"error": f"listing {listing_id} niet gevonden"}, status_code=404)
         d = row.to_dict()
     medians = city_medians_all()
-    return scenario_table(d, get_profile(profile), medians.get((d.get("city") or "").lower()))
+    from .benchmarks import BenchmarkMap
+    return scenario_table(d, get_profile(profile), medians.get((d.get("city") or "").lower()),
+                          BenchmarkMap())
 
 
 @app.get("/api/top5")

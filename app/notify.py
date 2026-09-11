@@ -96,6 +96,15 @@ def _deal_text(o: dict) -> tuple[str, str, str]:
         f"· {_fmt_eur(o.get('price_m2'))}/m²",
         f"Strategie: {o.get('best_strategie','?')}"
         + ("" if o.get("split_allowed", True) else " (niet splitsbaar)"),
+    ]
+    # Splitsen is de hoofdstrategie: aantal appartementen + zekerheid erbij
+    if o.get("split_status") and o["split_status"] != "nee":
+        zeker = {"vergunning": "✅ splitsingsvergunning",
+                 "genoemd": "splitsen genoemd in advertentie",
+                 "potentieel": "potentieel — check gemeente"}.get(o["split_status"], "")
+        regels.append(f"🏢 {'~' if o['split_status'] == 'potentieel' else ''}"
+                      f"{o.get('units')} appartementen à ±{o.get('unit_m2')} m² · {zeker}")
+    regels += [
         f"Netto conservatief: {_fmt_eur(o.get('best_laag'))} "
         f"(mid {_fmt_eur(o.get('best_mid'))})",
         f"ROI {o.get('roi_laag_pct')}% · marge {o.get('marge_pct')}% "
@@ -127,13 +136,15 @@ def _mark_sent(listing_id: int, score: int) -> None:
         s.commit()
 
 
-def check_and_alert(region: str = "", profile: str = "standaard",
+def check_and_alert(region: str = "", profile: str = "",
                     limit: int = 25) -> dict:
-    """Zoek nieuwe topdeals en stuur er een melding over. Idempotent."""
+    """Zoek nieuwe topdeals en stuur er een melding over. Idempotent.
+    ALERT_PROFILE bepaalt de criteria (bv. 'bob': alleen splitsbaar, tot €1 mln)."""
     if not notify_enabled():
         return {"status": "uit", "reden": "geen TELEGRAM_/PUSHOVER_/SMTP_ instellingen"}
 
     from .scenarios import get_profile, top_listings
+    profile = profile or _env("ALERT_PROFILE", "standaard")
     region = region or _env("ALERT_REGION", "grote_steden")
     min_profit = float(_env("ALERT_MIN_PROFIT", "50000"))
     min_roi = float(_env("ALERT_MIN_ROI", "15"))

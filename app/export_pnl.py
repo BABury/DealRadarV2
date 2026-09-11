@@ -65,6 +65,7 @@ A = {
     "verbouw_m2": 8, "contingency": 9, "splitskosten": 10,
     "rente": 11, "looptijd": 12, "holding_overig": 13,
     "courtage": 14, "verkoop_vast": 15, "split_verlies": 16, "band": 17,
+    "split_per_unit": 18,
 }
 
 
@@ -86,7 +87,7 @@ def _build_aannames(ws, p: dict):
         ("taxatie", "Taxatie, kadastrale & admin. kosten", 500, "€", "Budgetreservering"),
         ("verbouw_m2", "Verbouwbudget", p["focus_tier"], "€/m²", "Focus-tier uit DealRadar-profiel"),
         ("contingency", "Bouwcontingency / verborgen gebreken", 0.10, "%", "10% over directe verbouwkosten"),
-        ("splitskosten", "Splitsingskosten (alleen bij splitsen)", p["split_kosten"], "€", "Leges, akte, VvE, advies"),
+        ("splitskosten", "Splitsingskosten vast (alleen bij splitsen)", p["split_kosten"], "€", "Leges, splitsingsakte, VvE-oprichting, advies"),
         ("rente", "Financieringsrente", p["rente_pct"] / 100, "%/jr", "Over de totale inleg"),
         ("looptijd", "Projectduur", p["looptijd_mnd"], "mnd", "Aankoop -> verkoop incl. verbouw"),
         ("holding_overig", "Overige holdingkosten", 0, "€", "Verzekering/OZB/nuts — vul aan per project"),
@@ -94,6 +95,8 @@ def _build_aannames(ws, p: dict):
         ("verkoop_vast", "Vaste verkoopkosten", p["verkoop_vast"], "€", "Fotografie/brochure/notaris/royement"),
         ("split_verlies", "Verlies verkoopbaar opp. bij splitsen", p["go_verlies_pct"] / 100, "%", "Verkeersruimte na splitsing"),
         ("band", "Waardeband ± (conservatief scenario)", p["waarde_band"], "±", "Bandbreedte rond de exitwaarde"),
+        ("split_per_unit", "Splitsingskosten per extra appartement", p.get("split_per_unit", 0), "€",
+         "Keuken, badkamer, meterkast, brand- en geluidsscheiding"),
     ]
     for key, label, val, unit, toel in rows:
         r = A[key]
@@ -102,7 +105,7 @@ def _build_aannames(ws, p: dict):
         _set(ws, f"B{r}", val, BLUE, fmt=fmt, align="right", border=True)
         _set(ws, f"C{r}", unit, BLACK, border=True)
         _set(ws, f"D{r}", toel, Font(name=FONT, size=9, color="666666"), border=True)
-    note = ws["A19"]
+    note = ws["A20"]
     note.value = "Blauwe cellen zijn aan te passen. De object-tabs verwijzen naar deze aannames en herrekenen automatisch."
     note.font = Font(name=FONT, italic=True, size=9, color="666666")
 
@@ -141,6 +144,14 @@ def _build_object_sheet(ws, o: dict, exit_m2: float, strategie: str, p: dict):
     _set(ws, "A9", "Verkoopbaar oppervlak")
     # bij splitsen verlies je verkeersruimte
     _set(ws, "B9", f'=IF(B8="splitsen",B6*(1-{_ref("split_verlies")}),B6)', BLACK, fmt='#,##0 "m²"', align="right")
+    _set(ws, "A10", "Aantal appartementen (bij splitsen)")
+    _set(ws, "B10", int(o.get("units") or 1), BLUE, fmt='0 "app."', align="right")
+    if o.get("split_reden"):
+        _set(ws, "D10", f"{o.get('split_status', '')}: {o['split_reden']}",
+             Font(name=FONT, size=9, color="666666"))
+    if strategie == "splitsen" and o.get("split_premie_bron"):
+        _set(ws, "D7", f"app.-premie {o.get('split_premie')}× · {o['split_premie_bron']}",
+             Font(name=FONT, size=9, color="666666"))
 
     # ── opbrengsten ──
     _set(ws, "A11", "OPBRENGSTEN", HEAD, fill=HEAD_FILL); _set(ws, "B11", "", HEAD, fill=HEAD_FILL)
@@ -160,7 +171,9 @@ def _build_object_sheet(ws, o: dict, exit_m2: float, strategie: str, p: dict):
     _set(ws, "A22", "VERBOUW (BOQ)", HEAD, fill=HEAD_FILL); _set(ws, "B22", "", HEAD, fill=HEAD_FILL)
     _set(ws, "A23", "Directe verbouwkosten"); _set(ws, "B23", f"=B6*{_ref('verbouw_m2')}", BLACK, fmt=EUR, align="right")
     _set(ws, "A24", "Bouwcontingency"); _set(ws, "B24", f"=B23*{_ref('contingency')}", BLACK, fmt=EUR, align="right")
-    _set(ws, "A25", "Splitsingskosten"); _set(ws, "B25", f'=IF(B8="splitsen",{_ref("splitskosten")},0)', BLACK, fmt=EUR, align="right")
+    _set(ws, "A25", "Splitsingskosten (vast + per extra appartement)")
+    _set(ws, "B25", f'=IF(B8="splitsen",{_ref("splitskosten")}+{_ref("split_per_unit")}*MAX(0,B10-1),0)',
+         BLACK, fmt=EUR, align="right")
     _set(ws, "A26", "Totaal verbouw", BOLD); _set(ws, "B26", "=SUM(B23:B25)", BOLD, fmt=EUR, align="right")
 
     # ── investering + holding ──
@@ -218,7 +231,7 @@ def build_pnl_workbook(out_dir: str, region: str = "grote_steden",
     headers = ["#", "Adres", "Stad", "Strategie", "Vraagprijs", "m²", "€/m²",
                "Exit €/m²", "Projectwinst", "ROI", "Marge", "Conservatief netto",
                "Deal-score", "Gevonden", "Funda"]
-    widths = [4, 30, 16, 11, 13, 7, 9, 10, 14, 8, 8, 16, 11, 12, 8]
+    widths = [4, 30, 16, 17, 13, 7, 9, 10, 14, 8, 8, 16, 11, 12, 8]
     for i, (h, w) in enumerate(zip(headers, widths), start=1):
         col = get_column_letter(i)
         ws_over.column_dimensions[col].width = w
@@ -239,7 +252,9 @@ def build_pnl_workbook(out_dir: str, region: str = "grote_steden",
         strategie = "splitsen" if (o.get("best_strategie") == "splitsen"
                                    and o.get("split_allowed")) else "flip"
         huis_m2 = city_med * params["renov_uplift"]
-        exit_m2 = huis_m2 * params["app_premium"] if strategie == "splitsen" else huis_m2
+        # bij splitsen: marktpremie voor appartementen (uit segmentdata), niet de vaste gok
+        premie = o.get("split_premie") or params["app_premium"]
+        exit_m2 = huis_m2 * premie if strategie == "splitsen" else huis_m2
 
         sheet_name = _safe_sheet_name(f"{idx}. {o.get('address','')}", used_names)
         ws_obj = wb.create_sheet(sheet_name)
@@ -249,7 +264,9 @@ def build_pnl_workbook(out_dir: str, region: str = "grote_steden",
         _set(ws_over, f"A{row}", idx, BLACK, border=True)
         _set(ws_over, f"B{row}", o.get("address") or "", BLACK, border=True)
         _set(ws_over, f"C{row}", o.get("city") or "", BLACK, border=True)
-        _set(ws_over, f"D{row}", strategie, BLACK, border=True)
+        _set(ws_over, f"D{row}",
+             f"splitsen ({o.get('units')} app.)" if strategie == "splitsen" else strategie,
+             BLACK, border=True)
         _set(ws_over, f"E{row}", o.get("price") or 0, BLACK, fmt=EUR, align="right", border=True)
         _set(ws_over, f"F{row}", o.get("living_area") or 0, BLACK, fmt="#,##0", align="right", border=True)
         _set(ws_over, f"G{row}", o.get("price_m2") or 0, BLACK, fmt=EUR, align="right", border=True)

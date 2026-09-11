@@ -61,6 +61,7 @@ class Listing(Base):
     property_type: Mapped[str] = mapped_column(String(120), default="")
     build_year: Mapped[int] = mapped_column(Integer, nullable=True)
     rooms: Mapped[int] = mapped_column(Integer, nullable=True)
+    floors: Mapped[int] = mapped_column(Integer, nullable=True)   # woonlagen -> splitsen per laag
     energy_label: Mapped[str] = mapped_column(String(8), default="")
     maintenance: Mapped[str] = mapped_column(String(30), default="")
     erfpacht: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -115,6 +116,7 @@ class Listing(Base):
             "property_type": self.property_type,
             "build_year": self.build_year,
             "rooms": self.rooms,
+            "floors": self.floors,
             "energy_label": self.energy_label,
             "maintenance": self.maintenance,
             "erfpacht": self.erfpacht,
@@ -236,7 +238,8 @@ def init_db() -> None:
                             "bench_label": "VARCHAR(160) DEFAULT ''",
                             "bench_median": "FLOAT",
                             "discount_pct": "FLOAT",
-                            "published": "VARCHAR(40) DEFAULT ''"}.items():
+                            "published": "VARCHAR(40) DEFAULT ''",
+                            "floors": "INTEGER"}.items():
             if _name not in existing:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE listings ADD COLUMN {_name} {_ddl}"))
