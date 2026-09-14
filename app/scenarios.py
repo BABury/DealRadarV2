@@ -141,8 +141,12 @@ def _motivated(listing: dict) -> tuple[float, list[str]]:
         factor += 0.12 * min(len(drops), 2)
         tags.append(f"{len(drops)}× prijsverlaging")
     if (listing.get("source") or "") in AUCTION_SOURCES_SC:
-        factor += 0.15
-        tags.append("veiling")
+        if "[executieveiling]" in (listing.get("context") or "").lower():
+            factor += 0.20
+            tags.append("executieveiling")
+        else:
+            factor += 0.15
+            tags.append("veiling")
     # Lang te koop = onderhandelruimte, vaak nog vóór de eerste prijsverlaging
     dom = listing.get("days_on_market")
     if dom is not None:
@@ -153,7 +157,7 @@ def _motivated(listing: dict) -> tuple[float, list[str]]:
     return min(factor, 1.5), tags
 
 
-AUCTION_SOURCES_SC = {"veilingnotaris", "bog_auctions", "biedboek"}
+AUCTION_SOURCES_SC = {"vastgoedveiling", "veilingnotaris", "bog_auctions", "biedboek"}
 
 
 def max_bid(gdv: float, verbouw: float, p: dict, doel_roi_pct: float | None = None) -> int:
@@ -360,26 +364,46 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
     with SessionLocal() as s:
         q = (s.query(Listing)
              .filter(Listing.is_demo.is_(False),
-                     Listing.price.isnot(None), Listing.price > 0,
                      Listing.living_area.isnot(None), Listing.living_area > 0))
         if min_score:
             q = q.filter(Listing.flip_score >= min_score)
         for l in q.all():
+            # Veiling zonder vraagprijs: waarderen op het MAXIMALE BOD — "win je
+            # 'm voor ≤ dit bedrag, dan haal je je doelrendement". Dat is bij een
+            # veiling het getal waar het om draait.
+            veiling = not (l.price and l.price > 0)
+            if veiling and (l.source or "") not in AUCTION_SOURCES_SC:
+                continue
             if not all_cities and (l.city or "").lower() not in city_set:
+                continue
+            # Huurder blijft na de veiling: niet leeg te verbouwen/splitsen -> nooit een kans
+            if "huurbeding ingeroepen" in (l.context or "").lower():
                 continue
             # profielfilters (0 = uit)
             if params["min_area"] and l.living_area < params["min_area"]:
                 continue
             if params["max_area"] and l.living_area > params["max_area"]:
                 continue
-            if params["min_price"] and l.price < params["min_price"]:
-                continue
-            if params["max_price"] and l.price > params["max_price"]:
-                continue
-            if params["max_price_m2"] and (l.price_m2 or 0) > params["max_price_m2"]:
-                continue
             d = l.to_dict()
-            tab = scenario_table(d, params, medians.get((l.city or "").lower()), bm)
+            med = medians.get((l.city or "").lower())
+            max_bod = None
+            if veiling:
+                t0 = scenario_table(d, params, med, bm)
+                if "error" in t0:
+                    continue          # geen verkoopprijzen voor deze stad
+                f0 = t0["focus"]
+                max_bod = (f0.get("max_bod_split") if t0["split_allowed"] and f0.get("max_bod_split")
+                           else f0.get("max_bod_flip"))
+                if not max_bod:
+                    continue
+                d = {**d, "price": float(max_bod), "price_m2": round(max_bod / l.living_area)}
+            if params["min_price"] and d["price"] < params["min_price"]:
+                continue
+            if params["max_price"] and d["price"] > params["max_price"]:
+                continue
+            if params["max_price_m2"] and (d.get("price_m2") or 0) > params["max_price_m2"]:
+                continue
+            tab = scenario_table(d, params, med, bm)
             if "error" in tab:
                 continue
             f = tab["focus"]
@@ -417,8 +441,10 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
                 "id": l.id, "address": l.address, "city": l.city,
                 "neighbourhood": l.neighbourhood, "url": l.url,
                 "photo_url": l.photo_url,
-                "price": l.price, "living_area": l.living_area,
-                "price_m2": l.price_m2, "energy_label": l.energy_label,
+                "price": None if veiling else l.price, "living_area": l.living_area,
+                "price_m2": None if veiling else l.price_m2, "energy_label": l.energy_label,
+                "veiling": veiling, "max_bod": max_bod, "auction_date": l.auction_date,
+                "source": l.source,
                 "build_year": l.build_year, "flip_score": l.flip_score,
                 "score_breakdown": l.score_breakdown,
                 "best_mid": f["best_mid"], "best_laag": best_laag,

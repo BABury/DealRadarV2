@@ -553,7 +553,9 @@ async function loadTop5() {
         <b style="width:22px; text-align:center; opacity:.6;">${i + 1}</b>
         <div style="flex:1; min-width:180px;"><b>${o.address}</b>
           <span class="muted">· ${o.city}${o.neighbourhood ? " / " + o.neighbourhood : ""}</span><br>
-          <span class="muted" style="font-size:12px;">${fmt(o.price)} · ${o.living_area || "?"} m² · ${fmt(o.price_m2)}/m² · score ${o.flip_score}</span>
+          <span class="muted" style="font-size:12px;">${o.veiling
+            ? `🔨 veiling${o.auction_date ? " " + new Date(o.auction_date).toLocaleDateString("nl-NL") : ""} · <b style="color:var(--accent)">max. bod ${fmt(o.max_bod)}</b> · ${o.living_area || "?"} m²`
+            : `${fmt(o.price)} · ${o.living_area || "?"} m² · ${fmt(o.price_m2)}/m²`} · score ${o.flip_score}</span>
           <span style="font-size:11px; display:inline-flex; gap:8px; flex-wrap:wrap;">${badges.join(" ")}</span></div>
         <div style="text-align:right; min-width:180px;">
           <b style="color:${col}">${cons >= 0 ? "+" : ""}${fmt(cons)}</b>

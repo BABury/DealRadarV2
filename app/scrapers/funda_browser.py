@@ -26,7 +26,9 @@ BLOCK_MARKERS = ("je bent bijna op de pagina", "verifiëren dat onze bezoekers",
 
 def _cities() -> list[str]:
     raw = os.getenv("FUNDA_CITIES", "")
-    return [c.strip().lower() for c in raw.split(",") if c.strip()] or ["eindhoven"]
+    return [c.strip().lower() for c in raw.split(",") if c.strip()] or [
+        "amsterdam", "rotterdam", "den-haag", "utrecht", "eindhoven", "haarlem",
+        "leiden", "delft", "groningen", "nijmegen", "arnhem", "zwolle"]
 
 
 def search_url(city: str, max_price: int, page: int = 1, sort_new: bool = True) -> str:
@@ -35,7 +37,7 @@ def search_url(city: str, max_price: int, page: int = 1, sort_new: bool = True) 
     types = [t.strip() for t in os.getenv("FUNDA_OBJECT_TYPES", "house").split(",") if t.strip()]
     min_m2 = int(os.getenv("FUNDA_MIN_M2", "110"))
     q = {
-        "selected_area": f'["{city}"]',
+        "selected_area": f'["{_slug(city)}"]',
         "price": f'"0-{max_price}"',
         "object_type": "[" + ",".join(f'"{t}"' for t in types) + "]",
     }
@@ -164,11 +166,12 @@ class Browser:
         if os.getenv("FUNDA_WINDOW_OFFSCREEN", "1") != "0":
             args += ["--window-position=-32000,-32000", "--window-size=1440,900"]
         self._browser = self._pw.chromium.launch(headless=False, args=args)
+        # Geen vaste user-agent: een 'headed' Chromium heeft een realistische eigen
+        # UA die klopt met platform en versie (Mac lokaal, Linux op Railway).
+        # Een UA die niet bij het platform past is juist een bot-signaal.
         self._ctx = self._browser.new_context(
             locale="nl-NL", timezone_id="Europe/Amsterdam",
             viewport={"width": 1440, "height": 900},
-            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
         )
         self._ctx.add_init_script(
             "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});")
@@ -214,9 +217,62 @@ class Browser:
             self._pauze()
 
 
+def diagnose(city: str = "eindhoven") -> dict:
+    """Test: komt een echte browser vanaf DEZE machine langs Funda's botcheck?
+    Eén zoekpagina, geen opslag. Bedoeld voor Railway (datacenter-IP)."""
+    t0 = time.time()
+    try:
+        with Browser() as br:
+            br.min_delay = br.max_delay = 0.1
+            html, _ = br.open(search_url(city, 10_000_000), retries=0)
+    except Exception as e:
+        return {"ok": False, "fout": f"{type(e).__name__}: {str(e)[:200]}",
+                "seconden": round(time.time() - t0, 1)}
+    if html is None:
+        return {"ok": False, "geblokkeerd": True, "seconden": round(time.time() - t0, 1),
+                "uitleg": "Funda toont de botcheck aan dit IP — cloud-scrapen werkt hier niet."}
+    links = set(re.findall(r'href="(/detail/koop/[^"]+)"', html))
+    m = re.search(r"([\d.]+)\s*koopwoningen", html)
+    return {"ok": bool(links), "geblokkeerd": False, "objecten_op_pagina": len(links),
+            "funda_meldt": m.group(1) if m else None, "bytes": len(html),
+            "seconden": round(time.time() - t0, 1)}
+
+
+def _slug(city: str) -> str:
+    """Funda-gebiedsnaam: 'Den Haag' -> 'den-haag'."""
+    s = city.strip().lower().replace("'s-gravenhage", "den-haag")
+    return re.sub(r"\s+", "-", s)
+
+
+def _veiling_steden(bekende: list[str]) -> list[str]:
+    """Steden van grote (splitsbare) veilingwoningen waar het model nog geen
+    verkoopprijzen kent. Door daar Funda te scrapen krijgt het model een
+    meetlat en kan het die veiling doorrekenen (max. bod)."""
+    try:
+        from ..db import Listing, SessionLocal
+        from ..scenarios import city_medians_all
+        medianen = city_medians_all()
+        with SessionLocal() as s:
+            rows = (s.query(Listing.city)
+                    .filter(Listing.source.in_(("vastgoedveiling", "veilingnotaris",
+                                                "bog_auctions")),
+                            Listing.living_area >= 110).distinct().all())
+    except Exception:
+        return []
+    have = {_slug(c) for c in bekende}
+    extra = []
+    for (c,) in rows:
+        if not c or (c or "").lower() in medianen:
+            continue
+        sl = _slug(c)
+        if sl not in have and sl not in extra:
+            extra.append(sl)
+    return extra[:int(os.getenv("FUNDA_EXTRA_CITIES_MAX", "12"))]
+
+
 def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
     """Scrape actief woningaanbod per stad via de browser."""
-    max_price = int(os.getenv("FUNDA_MAX_PRICE", "1000000"))
+    max_price = int(os.getenv("FUNDA_MAX_PRICE", "10000000"))   # geen plafond (splitsdoel)
     max_per_city = int(os.getenv("FUNDA_MAX_PER_CITY", "40"))
     max_pages = int(os.getenv("FUNDA_MAX_PAGES", "10"))
     stad_timeout = float(os.getenv("SCRAPE_CITY_TIMEOUT", "600"))
@@ -227,12 +283,29 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
     print(f"[funda-browser] {len(bekend)} objecten al bekend", flush=True)
 
     cities = _cities()
+    # Automatisch ook de steden van splitsbare veilingkandidaten zonder marktdata
+    extra = _veiling_steden(cities)
+    if extra:
+        print(f"[funda-browser] + veilingsteden voor marktprijzen: {', '.join(extra)}", flush=True)
+        cities = cities + extra
     if on_total:
         on_total(len(cities))
 
     alles: list[dict] = []
+    geblokkeerd_op_rij = 0
     with Browser() as br:
         for city in cities:
+            # Noodstop: blokkeert Funda dit IP (bv. een datacenter), dan niet
+            # elke stad opnieuw proberen — dat kost alleen tijd.
+            if geblokkeerd_op_rij >= 2:
+                print(f"[funda-browser] Funda blokkeert dit IP — {city} en verder overgeslagen",
+                      flush=True)
+                if sink:
+                    try:
+                        sink(city, [], "blocked")
+                    except Exception:
+                        pass
+                continue
             deadline = time.time() + stad_timeout
             stad_items: list[dict] = []
             status = "ok"
@@ -278,6 +351,7 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
                 status = "error"
                 print(f"[funda-browser] {city} fout: {str(e)[:120]}", flush=True)
 
+            geblokkeerd_op_rij = geblokkeerd_op_rij + 1 if status == "blocked" else 0
             alles.extend(stad_items)
             print(f"[funda-browser] {city} klaar — {len(stad_items)} objecten "
                   f"(totaal {len(alles)})", flush=True)

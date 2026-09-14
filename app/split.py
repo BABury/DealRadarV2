@@ -77,6 +77,12 @@ def analyse(listing: dict, min_app_m2: float = 50, verkeer_pct: float = 10) -> d
     ongeschikt = any(n in soort for n in NIET_SPLITSBAAR)
     kansrijk = any(k in tekst for k in KANSRIJK)
 
+    # Huurbeding ingeroepen (veiling): de huurder blijft na de koop wonen.
+    # Dan kun je niet leeg verbouwen of splitsen — dat gaat vóór alles.
+    if "huurbeding ingeroepen" in tekst:
+        return {"units": max(units, 1) if area else 0, "status": "nee", "zekerheid": 0.0,
+                "unit_m2": area, "reden": "huurbeding ingeroepen — huurder blijft zitten"}
+
     if status:
         # De advertentie zegt dat het kan: dan minstens 2 eenheden
         units = max(units, 2)

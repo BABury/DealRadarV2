@@ -30,7 +30,7 @@ from .split import analyse as split_analyse
 SPLIT_MIN_APP_M2 = float(os.getenv("SPLIT_MIN_APP_M2", "50"))
 SPLIT_VERKEER_PCT = float(os.getenv("SPLIT_VERKEER_PCT", "10"))
 
-AUCTION_SOURCES = {"veilingnotaris", "bog_auctions", "biedboek"}
+AUCTION_SOURCES = {"vastgoedveiling", "veilingnotaris", "bog_auctions", "biedboek"}
 
 
 def city_medians(listings: list[Listing]) -> dict[str, float]:
@@ -131,10 +131,17 @@ def score_listing(l: Listing, bm: BenchmarkMap) -> tuple[int, list[str], dict]:
                 bd.append(f"{dom} dagen te koop (+{p})")
                 break
 
+    ctx = (l.context or "").lower()
     if l.source in AUCTION_SOURCES:
-        pts += 8; bd.append("veiling — gemotiveerde verkoop (+8)")
+        if "[executieveiling]" in ctx:
+            pts += 12; bd.append("executieveiling — gedwongen verkoop (+12)")
+        else:
+            pts += 8; bd.append("veiling — gemotiveerde verkoop (+8)")
+    # Huurder blijft na de veiling: niet leeg te verbouwen/splitsen/verkopen
+    if "huurbeding ingeroepen" in ctx:
+        pts -= 20; bd.append("⚠ huurbeding ingeroepen — huurder blijft zitten (−20)")
 
-    return min(pts, 100), bd, bench_info
+    return max(0, min(pts, 100)), bd, bench_info
 
 
 def compute_scores() -> int:

@@ -37,6 +37,19 @@ def _run_scrape(sources: list[str] | None = None) -> dict:
         _refresh_lock.release()
 
 
+def _run_daily() -> dict:
+    """Geplande ochtendrun + statusbericht op Telegram, zodat je elke dag weet
+    dat DealRadar nog draait (en ziet wat het opleverde)."""
+    report = _run_scrape()
+    try:
+        from .notify import notify_enabled, send_daily_status
+        if notify_enabled() and isinstance(report, dict) and report.get("status") != "al bezig":
+            send_daily_status(report)
+    except Exception as e:
+        print(f"[status] bericht mislukt: {e}", flush=True)
+    return report
+
+
 def _run_quickscan() -> dict:
     """Snelle scan op nieuw aanbod. Gebruikt dezelfde lock als de grote
     scrapes: nooit twee scrapes tegelijk (en de nachtrun heeft voorrang)."""
@@ -80,13 +93,13 @@ async def lifespan(app: FastAPI):
             print(f"[seed] {n} demo-objecten geladen (lege database)")
     _scheduler = BackgroundScheduler(timezone="Europe/Amsterdam")
     hour = int(os.getenv("SCRAPE_HOUR", "6"))
-    _scheduler.add_job(_run_scrape, CronTrigger(hour=hour, minute=0),
+    _scheduler.add_job(_run_daily, CronTrigger(hour=hour, minute=0),
                        id="daily_scrape", max_instances=1)
     # Wekelijkse verkocht-scrape → benchmarks (verkocht-data verandert langzaam)
     # Snelle scan op nieuw aanbod — de echte edge: goede deals zijn binnen
     # 24-48u weg, dus we kijken elke QUICKSCAN_MINUTES minuten of er iets
     # nieuws online staat en melden dat direct.
-    qs_min = int(os.getenv("QUICKSCAN_MINUTES", "20"))
+    qs_min = int(os.getenv("QUICKSCAN_MINUTES", "0"))   # pyfunda-API is geblokkeerd -> standaard uit
     if qs_min > 0:
         _scheduler.add_job(_run_quickscan, CronTrigger(minute=f"*/{qs_min}"),
                            id="quickscan", max_instances=1)
@@ -99,10 +112,10 @@ async def lifespan(app: FastAPI):
     _scheduler.start()
     from .scenarios import seed_profiles
     seed_profiles()
-    if os.getenv("SCRAPE_ON_START", "0") == "1":
+    if os.getenv("SCRAPE_ON_START", "1") == "1":       # na elke deploy direct resultaten
         threading.Thread(target=_run_scrape, daemon=True).start()
     # Eerste keer: nog geen verkocht-data? Dan direct benchmarks opbouwen.
-    if os.getenv("SOLD_SCRAPE_ON_START", "1") == "1":
+    if os.getenv("SOLD_SCRAPE_ON_START", "0") == "1":   # pyfunda-verkocht is geblokkeerd -> uit
         def _sold_if_empty():
             from .db import SoldListing
             with SessionLocal() as s:
@@ -327,6 +340,14 @@ def benchmarks_ep(city: str = Query(default="")):
     """Marktscorebord: €/m² p25/mediaan/p75 per stad × segment, incl. wijken."""
     from .benchmarks import scoreboard
     return scoreboard(city)
+
+
+@app.get("/api/diag/funda")
+def diag_funda(city: str = Query(default="eindhoven")):
+    """Test of een echte browser vanaf deze server langs Funda's botcheck komt.
+    Eén zoekpagina, niets wordt opgeslagen. Duurt ±20 seconden."""
+    from .scrapers.funda_browser import diagnose
+    return diagnose(city)
 
 
 @app.get("/api/export-pnl")

@@ -133,8 +133,8 @@ def _build_object_sheet(ws, o: dict, exit_m2: float, strategie: str, p: dict):
 
     # ── invoer (blauw) ──
     _set(ws, "A4", "OBJECT-INVOER", HEAD, fill=HEAD_FILL); _set(ws, "B4", "", HEAD, fill=HEAD_FILL)
-    _set(ws, "A5", "Aankoopprijs (vraagprijs)")
-    _set(ws, "B5", o.get("price") or 0, BLUE, fmt=EUR, align="right")
+    _set(ws, "A5", "Aankoopprijs = MAX. BOD (veiling)" if o.get("veiling") else "Aankoopprijs (vraagprijs)")
+    _set(ws, "B5", o.get("price") or o.get("max_bod") or 0, BLUE, fmt=EUR, align="right")
     _set(ws, "A6", "Woonoppervlak")
     _set(ws, "B6", o.get("living_area") or 0, BLUE, fmt='#,##0 "m²"', align="right")
     _set(ws, "A7", "Exit-verkoopprijs (gerenoveerd)")
@@ -267,7 +267,7 @@ def build_pnl_workbook(out_dir: str, region: str = "grote_steden",
         _set(ws_over, f"D{row}",
              f"splitsen ({o.get('units')} app.)" if strategie == "splitsen" else strategie,
              BLACK, border=True)
-        _set(ws_over, f"E{row}", o.get("price") or 0, BLACK, fmt=EUR, align="right", border=True)
+        _set(ws_over, f"E{row}", o.get("price") or o.get("max_bod") or 0, BLACK, fmt=EUR, align="right", border=True)
         _set(ws_over, f"F{row}", o.get("living_area") or 0, BLACK, fmt="#,##0", align="right", border=True)
         _set(ws_over, f"G{row}", o.get("price_m2") or 0, BLACK, fmt=EUR, align="right", border=True)
         _set(ws_over, f"H{row}", round(exit_m2), BLACK, fmt=EUR, align="right", border=True)

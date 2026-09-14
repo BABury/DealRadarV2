@@ -124,7 +124,37 @@ def _scrape_veilingportaal(list_url: str, source: str) -> list[dict]:
     if not items:
         raise RuntimeError(f"Geen veilingen geparsed op {list_url} — "
                            "structuur gewijzigd of verzoek geblokkeerd.")
-    return items
+    return _verrijk(items, source)
+
+
+def _verrijk(items: list[dict], source: str) -> list[dict]:
+    """Vult m², bouwjaar, omschrijving, executie/huurbeding aan.
+
+    De overzichtspagina geeft alleen titel en type. Deze sites horen bij één
+    netwerk met gedeelde veilingnummers; vastgoedveiling.nl levert per nummer
+    de volledige JSON. Zonder deze stap had elk object 0 m² — en kon het model
+    er niets mee (ook niet in de oude DealRadar)."""
+    import time
+    from .vastgoedveiling import _auction_to_dict, fetch_auction
+
+    uit: list[dict] = []
+    verrijkt = 0
+    for it in items:
+        m = re.search(r"/veilingen?/(\d+)", it["url"])
+        a = fetch_auction(m.group(1)) if m else None
+        if a:
+            d = _auction_to_dict(a, it["url"])
+            if d is None:          # buitenlandse veiling -> overslaan
+                continue
+            d["source"] = source
+            d["auction_date"] = d.get("auction_date") or it.get("auction_date", "")
+            uit.append(d)
+            verrijkt += 1
+            time.sleep(0.3)
+        else:
+            uit.append(it)         # geen detaildata: houd de lijst-info
+    print(f"[{source}] {verrijkt}/{len(items)} objecten verrijkt met m²/bouwjaar", flush=True)
+    return uit
 
 
 def _try_urls(urls: list[str], source: str) -> list[dict]:

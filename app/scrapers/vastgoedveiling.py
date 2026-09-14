@@ -100,10 +100,20 @@ def _auction_to_dict(a: dict, url: str) -> dict | None:
     if transform:
         analysed["flag_ontwikkeling"] = True
 
-    # Zonder maat én zonder ontwikkelsignaal valt er niets te rekenen of te
-    # beoordelen — dan slaan we het object niet op.
-    if not opp and not perceel and not analysed.get("flag_ontwikkeling"):
-        return None
+    # Twee veilingkenmerken die voor de strategie beslissend zijn:
+    #  - executieveiling  = gedwongen verkoop, sterkste motivatiesignaal
+    #  - huurbeding ingeroepen = de huurder BLIJFT na de veiling; dan kun je
+    #    niet leeg verbouwen, splitsen of verkopen -> dealbreaker-waarschuwing
+    verkoop = str(a.get("type_verkoop") or "").lower()
+    gebruik = str(a.get("gebruikssituatie") or "").lower().replace(" ", "_")
+    markers = []
+    if "executie" in verkoop:
+        markers.append("[executieveiling]")
+    if "huurbeding_is_ingeroepen" in gebruik:
+        markers.append("[huurbeding ingeroepen: huurder blijft zitten]")
+        analysed["flag_verhuurd"] = True
+    # (objecten zonder maat houden we tóch: het centrale woningfilter beslist,
+    #  en een woning zonder m² is nog steeds een lead)
 
     straat = (a.get("straat") or "").strip()
     huisnr = (a.get("huisnummer") or "").strip()
@@ -126,9 +136,33 @@ def _auction_to_dict(a: dict, url: str) -> dict | None:
         "published": str(a.get("publicatiedatum") or ""),
         "photo_url": str(a.get("thumb") or "")[:600],
         "broker": a.get("makelaar_naam") or "",
-        "context": beschrijving[:2000],
         **analysed,
+        # na **analysed: markers vooraan zodat filter, splitsanalyse en scoring
+        # ze altijd zien (analyse_description levert alleen snippets)
+        "context": (" ".join(markers) + " " + (analysed.get("context") or "")).strip()[:2000],
     }
+
+
+def fetch_auction(vid: str) -> dict | None:
+    """Volledige veilingdata op veilingnummer.
+
+    vastgoedveiling.nl, veilingnotaris.nl en bog-auctions.com zijn één netwerk
+    dat elkaars veilingen doorplaatst mét hetzelfde nummer. Alleen
+    vastgoedveiling.nl levert de complete JSON (m², bouwjaar, omschrijving),
+    dus die gebruiken we als bron voor alle drie."""
+    try:
+        nd = _next_data(_get(f"{BASE}/veiling/{vid}/x"))
+    except Exception:
+        return None
+    return (nd or {}).get("props", {}).get("pageProps", {}).get("auction")
+
+
+def list_ids() -> set[str]:
+    """Veilingnummers die vastgoedveiling.nl zelf al toont."""
+    try:
+        return set(re.findall(r"/veiling/(\d+)/", _get(f"{BASE}/veilingen")))
+    except Exception:
+        return set()
 
 
 def scrape_vastgoedveiling() -> list[dict]:

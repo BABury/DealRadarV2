@@ -91,9 +91,15 @@ def _fmt_eur(v) -> str:
 
 def _deal_text(o: dict) -> tuple[str, str, str]:
     titel = f"🏠 {o.get('address','?')} · {o.get('city','')}"
+    if o.get("veiling"):
+        datum = (o.get("auction_date") or "")[:10]
+        prijsregel = (f"🔨 Veiling {datum} · MAX. BOD {_fmt_eur(o.get('max_bod'))} "
+                      f"· {o.get('living_area') or '?'} m²  (daarboven haal je je doelrendement niet)")
+    else:
+        prijsregel = (f"Vraagprijs {_fmt_eur(o.get('price'))} · {o.get('living_area') or '?'} m² "
+                      f"· {_fmt_eur(o.get('price_m2'))}/m²")
     regels = [
-        f"Vraagprijs {_fmt_eur(o.get('price'))} · {o.get('living_area') or '?'} m² "
-        f"· {_fmt_eur(o.get('price_m2'))}/m²",
+        prijsregel,
         f"Strategie: {o.get('best_strategie','?')}"
         + ("" if o.get("split_allowed", True) else " (niet splitsbaar)"),
     ]
@@ -144,7 +150,7 @@ def check_and_alert(region: str = "", profile: str = "",
         return {"status": "uit", "reden": "geen TELEGRAM_/PUSHOVER_/SMTP_ instellingen"}
 
     from .scenarios import get_profile, top_listings
-    profile = profile or _env("ALERT_PROFILE", "standaard")
+    profile = profile or _env("ALERT_PROFILE", "bob")
     region = region or _env("ALERT_REGION", "grote_steden")
     min_profit = float(_env("ALERT_MIN_PROFIT", "50000"))
     min_roi = float(_env("ALERT_MIN_ROI", "15"))
@@ -172,3 +178,39 @@ def check_and_alert(region: str = "", profile: str = "",
             verstuurd += 1
     return {"status": "ok", "nieuw": verstuurd, "kandidaten": len(kandidaten),
             "drempel": {"min_winst": min_profit, "min_roi": min_roi}}
+
+
+def send_daily_status(report: dict) -> bool:
+    """Dagelijks bericht na de ochtendrun: draait hij nog, en wat leverde het op?
+
+    Zo weet je elke ochtend zonder te kijken dat DealRadar nog scrapet — en
+    krijg je een seintje als een bron stuk is. Uit te zetten met DAILY_STATUS=0."""
+    if _env("DAILY_STATUS", "1") == "0":
+        return False
+    regels = ["<b>📡 DealRadar — ochtendrun</b>"]
+    fout = []
+    for bron, r in report.items():
+        if bron.startswith("_") or not isinstance(r, dict):
+            continue
+        if r.get("status") == "ok":
+            nieuw = r.get("new", 0)
+            wo = r.get("woningen", r.get("found", 0))
+            regels.append(f"✅ {bron}: {wo} woningen ({nieuw} nieuw)")
+        else:
+            fout.append(bron)
+            regels.append(f"⚠️ {bron}: {r.get('status')} {str(r.get('message', ''))[:60]}")
+    try:
+        from .scenarios import get_profile, top_listings
+        profiel = _env("ALERT_PROFILE", "bob")
+        d = top_listings(get_profile(profiel), n=3, rank="risk", region="alle")
+        regels.append(f"\n🏢 {d['beoordeeld']} splitskansen met winst (profiel '{profiel}')")
+        for o in d["top"]:
+            p = (f"max. bod {_fmt_eur(o.get('max_bod'))}" if o.get("veiling")
+                 else _fmt_eur(o.get("price")))
+            regels.append(f"• {o.get('address')}, {o.get('city')} — {p} · "
+                          f"{o.get('units')} app. · netto {_fmt_eur(o.get('best_laag'))}")
+    except Exception as e:
+        regels.append(f"(ranglijst niet beschikbaar: {str(e)[:60]})")
+    if fout and len(fout) == sum(1 for b in report if not b.startswith("_")):
+        regels.insert(1, "❌ ALLE bronnen faalden — kijk in Railway naar de logs.")
+    return send_telegram("\n".join(regels))

@@ -97,11 +97,12 @@ def is_usable(item: dict) -> bool:
 
 
 def keep(item: dict) -> bool:
-    if not is_usable(item):
-        return False
-    if residential_only() and not is_residential(item):
-        return False
-    return True
+    """Een woning blijft altijd staan — ook zonder prijs of m² (bij veilingen
+    is dat normaal; het blijft een lead). Alleen niet-woningen en objecten
+    zonder enige aanwijzing vallen af."""
+    if residential_only():
+        return is_residential(item)
+    return is_usable(item)
 
 
 def filter_items(items: list[dict], bron: str = "") -> list[dict]:
