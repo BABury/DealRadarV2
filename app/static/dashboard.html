@@ -50,6 +50,9 @@
   .lab-C, .lab-B, .lab-A { background: rgba(74,222,128,.15); color: var(--accent); }
   .bd { color: var(--muted); font-size: 12px; margin-top: 3px; max-width: 420px; }
   .muted { color: var(--muted); }
+  .dr-tab { border:none; border-bottom:2px solid transparent; border-radius:0; background:transparent; padding:8px 14px; color:var(--muted); font-size:14px; }
+  .dr-tab.on { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
+  .dr-tab .dr-n { font-size:11px; color:var(--muted); margin-left:4px; }
   #srcstatus { margin-top: 18px; color: var(--muted); font-size: 12px; }
   #srcstatus span { margin-right: 16px; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
@@ -177,6 +180,7 @@
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; font-size:13px; margin-top:6px;">
         <label>Alleen splitsbaar (1 = ja)<input type="number" id="pp-alleen_splitsbaar" min="0" max="1" step="1"></label>
         <label>Min. aantal appartementen<input type="number" id="pp-min_units" min="0" step="1"></label>
+        <label>Max. aantal appartementen (0 = geen)<input type="number" id="pp-max_units" min="0" step="1"></label>
         <label>Min. appartement m² (gemeente!)<input type="number" id="pp-min_app_m2" step="5"></label>
         <label>Splitskosten per extra app. €<input type="number" id="pp-split_per_unit" step="1000"></label>
         <label>Verkeersruimte bij splitsen %<input type="number" id="pp-go_verlies_pct" step="1"></label>
@@ -187,7 +191,13 @@
         <span class="muted" style="font-size:12px;">Wekelijks bijstellen? Pas aan, sla op als bijv. "week 30" en vergelijk runs per profiel.</span>
       </div>
     </div>
-    <div id="top5-list" style="margin-top:12px;"><span class="muted">Laden…</span></div>
+    <div class="dr-tabs" style="display:flex; gap:6px; margin-top:14px; border-bottom:1px solid var(--border);">
+      <button class="dr-tab on" data-soort="koop" onclick="setTab('koop')">🏠 Funda te koop <span class="dr-n"></span></button>
+      <button class="dr-tab" data-soort="veiling" onclick="setTab('veiling')">🔨 Veilingen <span class="dr-n"></span></button>
+      <button class="dr-tab" data-soort="project" onclick="setTab('project')">🏗 Grote projecten <span class="dr-n"></span></button>
+    </div>
+    <div id="dr-tab-uitleg" class="muted" style="font-size:12px; margin-top:8px;"></div>
+    <div id="top5-list" style="margin-top:8px;"><span class="muted">Laden…</span></div>
   </div>
 
   <div class="card" style="margin-bottom:18px;" id="bench-card">
@@ -205,9 +215,15 @@
     <select id="f-source" onchange="load()">
       <option value="">Alle bronnen</option>
       <option value="funda">Funda</option>
+      <option value="vastgoedveiling">Vastgoedveiling</option>
       <option value="veilingnotaris">Veilingnotaris</option>
       <option value="bog_auctions">BOG Auctions</option>
       <option value="biedboek">Biedboek</option>
+    </select>
+    <select id="f-sort" onchange="load()" title="Volgorde van de lijst">
+      <option value="score">Sorteer: hoogste score</option>
+      <option value="nieuw">Sorteer: nieuwst gevonden</option>
+      <option value="oud">Sorteer: langst in de lijst</option>
     </select>
     <input type="text" id="f-q" placeholder="Zoek adres…" oninput="debounceLoad()">
     <label>Min. score <span id="f-score-v">30</span></label>
@@ -219,7 +235,7 @@
     <thead><tr>
       <th>Score</th><th>Object</th><th>Stad</th><th>Wijk</th><th>Prijs</th><th>€/m²</th>
       <th>Markt €/m²</th><th>t.o.v. markt</th>
-      <th>Label</th><th>Bouwjaar</th><th>Signalen</th><th>Bron</th>
+      <th>Label</th><th>Bouwjaar</th><th>Signalen</th><th>Gevonden</th><th>Bron</th>
     </tr></thead>
     <tbody id="rows"></tbody>
   </table>
@@ -234,6 +250,17 @@ let cityStats = {};
 
 async function loadCityStats() {
   try { cityStats = await (await fetch("/api/city-stats")).json(); } catch (e) {}
+}
+function gevondenCel(iso) {
+  if (!iso) return '<span class="muted">–</span>';
+  const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
+  // kalenderdagen (lokale tijd), niet blokken van 24 uur: gisteren 16:00 = "gisteren"
+  const dag = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dagen = Math.round((dag(new Date()) - dag(d)) / 86400000);
+  const wanneer = dagen <= 0 ? "vandaag" : dagen === 1 ? "gisteren" : `${dagen} dagen geleden`;
+  const kleur = dagen <= 1 ? "var(--accent)" : dagen <= 7 ? "var(--text)" : "var(--muted)";
+  return `<span style="color:${kleur}; white-space:nowrap">${d.toLocaleDateString("nl-NL")}</span>
+          <div class="muted" style="font-size:11px">${wanneer}</div>`;
 }
 function debounceLoad() { clearTimeout(t); t = setTimeout(load, 300); }
 
@@ -259,7 +286,8 @@ async function load() {
   const source = document.getElementById("f-source").value;
   const q = document.getElementById("f-q").value;
   const min = document.getElementById("f-score").value;
-  const url = `/api/opportunities?city=${encodeURIComponent(city)}&source=${source}&min_score=${min}&q=${encodeURIComponent(q)}`;
+  const sort = document.getElementById("f-sort").value;
+  const url = `/api/opportunities?city=${encodeURIComponent(city)}&source=${source}&min_score=${min}&sort=${sort}&q=${encodeURIComponent(q)}`;
   const rows = await (await fetch(url)).json();
   rowsById = {};
   rows.forEach(r => rowsById[r.id] = r);
@@ -287,10 +315,11 @@ async function load() {
       <td>${r.energy_label ? `<span class="label lab-${r.energy_label[0]}">${r.energy_label}</span>` : "–"}</td>
       <td>${r.build_year || "–"}</td>
       <td>${flags || '<span class="muted">–</span>'}</td>
+      <td>${gevondenCel(r.first_seen)}</td>
       <td><span class="badge-src ${auction ? "auction" : ""}">${r.source}</span>
           ${r.auction_date ? `<div class="muted" style="font-size:11px">${r.auction_date}</div>` : ""}</td>
     </tr>`;
-  }).join("") || '<tr><td colspan="12" class="muted" style="padding:30px;text-align:center">Geen objecten — verlaag de minimumscore of start een scrape.</td></tr>';
+  }).join("") || '<tr><td colspan="13" class="muted" style="padding:30px;text-align:center">Geen objecten — verlaag de minimumscore of start een scrape.</td></tr>';
   document.getElementById("lastupdate").textContent = "bijgewerkt " + new Date().toLocaleTimeString("nl-NL");
   loadSources();
 }
@@ -429,7 +458,7 @@ const PP_FIELDS = ["focus_tier","renov_uplift","app_premium","ovb_pct",
                    "split_kosten","huur_m2","opex_pct","waarde_band",
                    "min_area","max_area","min_price","max_price","max_price_m2",
                    "min_conservatief","alleen_splitsbaar","min_units","min_app_m2",
-                   "split_per_unit","go_verlies_pct"];
+                   "split_per_unit","go_verlies_pct","max_units"];
 
 async function purgeDemo() {
   if (!confirm("Alle demo-objecten definitief verwijderen?")) return;
@@ -485,6 +514,29 @@ async function saveProfile(asNew) {
   loadTop5();
 }
 
+let drTab = "koop";
+const DR_UITLEG = {
+  koop: "Gewone woningen op Funda met een echte vraagprijs. De cijfers zijn het meest betrouwbaar.",
+  veiling: "Veilingwoningen tot ±20 appartementen, gewaardeerd op je MAXIMALE BOD: win je hem voor dat bedrag of minder, dan haal je je doelrendement.",
+  project: "Biedboek en alles boven ±20 appartementen of 1.200 m². Transformatieprojecten met vergunningstraject en lange doorlooptijd — cijfers alleen INDICATIEF."
+};
+async function loadTabCounts(region, rank) {
+  // aantallen op de andere tabs op de achtergrond ophalen
+  for (const t of ["koop", "veiling", "project"]) {
+    if (t === drTab) continue;
+    fetch(`/api/top5?n=1&soort=${t}&region=${region}&rank=${rank}&profile=` + encodeURIComponent(curProfile()))
+      .then(r => r.json()).then(r => {
+        const el = document.querySelector(`.dr-tab[data-soort="${t}"] .dr-n`);
+        if (el) el.textContent = `(${r.beoordeeld})`;
+      }).catch(() => {});
+  }
+}
+function setTab(t) {
+  drTab = t;
+  document.querySelectorAll(".dr-tab").forEach(b => b.classList.toggle("on", b.dataset.soort === t));
+  loadTop5();
+}
+
 async function loadTop5() {
   const el = document.getElementById("top5-list");
   el.innerHTML = '<span class="muted">Doorrekenen…</span>';
@@ -493,8 +545,13 @@ async function loadTop5() {
     const region = document.getElementById("p-region").value;
     const regionLbl = {grote_steden: "grote steden", randstad: "Randstad",
                        regio_eindhoven: "regio Eindhoven", alle: "alle steden"}[region] || region;
-    document.getElementById("top5-title").textContent = "🏆 Top 5 — " + regionLbl;
-    const r = await (await fetch("/api/top5?n=5&region=" + region + "&rank=" + rank + "&profile=" + encodeURIComponent(curProfile()))).json();
+    document.getElementById("top5-title").textContent = "🏆 Top 10 — " + regionLbl;
+    loadTabCounts(region, rank);
+    const soort = drTab;
+    document.getElementById("dr-tab-uitleg").textContent = DR_UITLEG[soort] || "";
+    const r = await (await fetch("/api/top5?n=10&soort=" + soort + "&region=" + region + "&rank=" + rank + "&profile=" + encodeURIComponent(curProfile()))).json();
+    const nEl = document.querySelector(`.dr-tab[data-soort="${soort}"] .dr-n`);
+    if (nEl) nEl.textContent = `(${r.beoordeeld})`;
     const fl = [];
     if (r.params.min_area) fl.push(`≥${r.params.min_area} m²`);
     if (r.params.max_area) fl.push(`≤${r.params.max_area} m²`);
@@ -527,6 +584,9 @@ async function loadTop5() {
         const pre = o.split_status === "potentieel" ? "~" : "";
         badges.push(`<span style="color:${zeker[1]}; font-weight:600" title="${(o.split_reden || "").replace(/"/g, "")}">`
           + `${zeker[0]} ${pre}${o.units} app. à ±${o.unit_m2} m² · ${zeker[2]}</span>`);
+      }
+      if (o.ontwikkelproject) {
+        badges.push(`<span style="color:#e0506b; font-weight:600" title="Boven ~20 appartementen is dit een transformatieproject (vergunningstraject, parkeernorm, jaren doorlooptijd). Het splitsmodel rekent hier te optimistisch.">🏗 ontwikkelproject — cijfers indicatief</span>`);
       }
       // Wanneer is deze kans gevonden?
       if (o.dagen_bekend != null) {
@@ -561,7 +621,7 @@ async function loadTop5() {
           <b style="color:${col}">${cons >= 0 ? "+" : ""}${fmt(cons)}</b>
           <span class="muted" style="font-size:12px;"> netto · ${o.best_strategie}</span><br>
           <span class="muted" style="font-size:12px;">ROI ${o.roi_laag_pct != null ? o.roi_laag_pct + "%" : "–"} · marge ${o.marge_pct != null ? o.marge_pct + "%" : "–"} · tot ${fmt(o.best_mid)} mid</span></div>
-        ${o.url ? `<a href="${o.url}" target="_blank" onclick="event.stopPropagation()">funda ↗</a>` : ""}
+        ${o.url ? `<a href="${o.url}" target="_blank" onclick="event.stopPropagation()">${o.source && o.source !== "funda" ? o.source : "funda"} ↗</a>` : ""}
       </div>`;
     }).join("");
   } catch (e) {

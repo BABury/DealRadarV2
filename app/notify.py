@@ -110,6 +110,8 @@ def _deal_text(o: dict) -> tuple[str, str, str]:
                  "potentieel": "potentieel — check gemeente"}.get(o["split_status"], "")
         regels.append(f"🏢 {'~' if o['split_status'] == 'potentieel' else ''}"
                       f"{o.get('units')} appartementen à ±{o.get('unit_m2')} m² · {zeker}")
+    if o.get("ontwikkelproject"):
+        regels.append("🏗 Ontwikkelproject (>20 app.) — cijfers alleen indicatief")
     regels += [
         f"Netto conservatief: {_fmt_eur(o.get('best_laag'))} "
         f"(mid {_fmt_eur(o.get('best_mid'))})",
@@ -156,8 +158,10 @@ def check_and_alert(region: str = "", profile: str = "",
     min_roi = float(_env("ALERT_MIN_ROI", "15"))
 
     data = top_listings(get_profile(profile), n=limit, rank="risk", region=region)
+    # Grote projecten niet pushen: cijfers indicatief, en niet 'min moeite'
     kandidaten = [o for o in data["top"]
-                  if (o.get("best_laag") or 0) >= min_profit
+                  if o.get("categorie") != "project"
+                  and (o.get("best_laag") or 0) >= min_profit
                   and (o.get("roi_laag_pct") or 0) >= min_roi]
     if not kandidaten:
         return {"status": "ok", "nieuw": 0, "bekeken": len(data["top"])}
@@ -202,13 +206,16 @@ def send_daily_status(report: dict) -> bool:
     try:
         from .scenarios import get_profile, top_listings
         profiel = _env("ALERT_PROFILE", "bob")
-        d = top_listings(get_profile(profiel), n=3, rank="risk", region="alle")
-        regels.append(f"\n🏢 {d['beoordeeld']} splitskansen met winst (profiel '{profiel}')")
-        for o in d["top"]:
-            p = (f"max. bod {_fmt_eur(o.get('max_bod'))}" if o.get("veiling")
-                 else _fmt_eur(o.get("price")))
-            regels.append(f"• {o.get('address')}, {o.get('city')} — {p} · "
-                          f"{o.get('units')} app. · netto {_fmt_eur(o.get('best_laag'))}")
+        dp = top_listings(get_profile(profiel), n=1, rank="risk", region="alle", soort="project")
+        for soort, kop in (("koop", "🏠 Funda te koop"), ("veiling", "🔨 Veilingen (max. bod)")):
+            d = top_listings(get_profile(profiel), n=3, rank="risk", region="alle", soort=soort)
+            regels.append(f"\n{kop}: {d['beoordeeld']} splitskansen met winst")
+            for o in d["top"]:
+                p = (f"max. bod {_fmt_eur(o.get('max_bod'))}" if o.get("veiling")
+                     else _fmt_eur(o.get("price")))
+                regels.append(f"• {o.get('address')}, {o.get('city')} — {p} · "
+                              f"{o.get('units')} app. · netto {_fmt_eur(o.get('best_laag'))}")
+        regels.append(f"\n🏗 Grote projecten: {dp['beoordeeld']} (zie dashboard, cijfers indicatief)")
     except Exception as e:
         regels.append(f"(ranglijst niet beschikbaar: {str(e)[:60]})")
     if fout and len(fout) == sum(1 for b in report if not b.startswith("_")):

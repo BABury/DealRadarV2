@@ -99,6 +99,13 @@ async def lifespan(app: FastAPI):
     # Snelle scan op nieuw aanbod — de echte edge: goede deals zijn binnen
     # 24-48u weg, dus we kijken elke QUICKSCAN_MINUTES minuten of er iets
     # nieuws online staat en melden dat direct.
+    # Extra Funda-runs gespreid over de dag (elke run 4 steden, roterend).
+    # Funda blokkeert op tempo, dus liever vaker kleine porties dan één grote.
+    for i, h in enumerate(os.getenv("FUNDA_HOURS", "12,17,22").split(",")):
+        if h.strip().isdigit():
+            _scheduler.add_job(_run_scrape, CronTrigger(hour=int(h), minute=0),
+                               args=[["funda"]], id=f"funda_extra_{i}", max_instances=1)
+
     qs_min = int(os.getenv("QUICKSCAN_MINUTES", "0"))   # pyfunda-API is geblokkeerd -> standaard uit
     if qs_min > 0:
         _scheduler.add_job(_run_quickscan, CronTrigger(minute=f"*/{qs_min}"),
@@ -148,6 +155,7 @@ def opportunities(
     source: str = Query(default=""),
     min_score: int = Query(default=0),
     q: str = Query(default=""),
+    sort: str = Query(default="score"),
     limit: int = Query(default=200, le=1000),
 ):
     with SessionLocal() as s:
@@ -160,7 +168,10 @@ def opportunities(
             qry = qry.filter(Listing.flip_score >= min_score)
         if q:
             qry = qry.filter(Listing.address.ilike(f"%{q}%"))
-        rows = qry.order_by(desc(Listing.flip_score)).limit(limit).all()
+        # score (standaard) | nieuw = laatst gevonden eerst | oud = langst in de lijst
+        volgorde = {"nieuw": desc(Listing.first_seen),
+                    "oud": Listing.first_seen.asc()}.get(sort, desc(Listing.flip_score))
+        rows = qry.order_by(volgorde).limit(limit).all()
         return [r.to_dict() for r in rows]
 
 
@@ -253,6 +264,7 @@ def top5(profile: str = Query(default="standaard"),
          n: int = Query(default=5, le=25),
          min_score: int = Query(default=0),
          rank: str = Query(default="risk"),
+         soort: str = Query(default="koop"),
          min_area: float = Query(default=None),
          max_area: float = Query(default=None),
          min_price: float = Query(default=None),
@@ -271,8 +283,9 @@ def top5(profile: str = Query(default="standaard"),
     city_list = [c.strip() for c in cities.split(",") if c.strip()] or None
     rank = rank if rank in ("risk", "roi", "winst", "nieuw", "oud") else "risk"
     region = region if region in ("grote_steden", "randstad", "regio_eindhoven", "alle") else "grote_steden"
+    soort = soort if soort in ("alles", "koop", "veiling", "project") else "koop"
     return top_listings(params, cities=city_list, n=n, min_score=min_score,
-                        rank=rank, region=region)
+                        rank=rank, region=region, soort=soort)
 
 
 @app.get("/api/city-stats")

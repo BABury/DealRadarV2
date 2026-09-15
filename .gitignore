@@ -1,0 +1,22 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Lokale database & logs
+*.db
+*.log
+
+# Gegenereerde Excel-exports
+DealRadar-Top*.xlsx
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# lokale inloggegevens
+.env
+scrape.log
+launchd.*.log

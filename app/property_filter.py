@@ -109,7 +109,8 @@ def filter_items(items: list[dict], bron: str = "") -> list[dict]:
     """Filtert een scrape-resultaat en logt wat er afvalt."""
     if not items:
         return items
-    over = [i for i in items if keep(i)]
+    # Prijs-updates van al bekende woningen altijd doorlaten (prijshistorie)
+    over = [i for i in items if i.get("_update_only") or keep(i)]
     weg = len(items) - len(over)
     if weg:
         print(f"[filter] {bron}: {weg} van {len(items)} weggefilterd "

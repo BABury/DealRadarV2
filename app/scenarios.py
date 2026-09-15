@@ -81,7 +81,19 @@ DEFAULT_PARAMS = {
     "max_price_m2": 0,       # maximale aankoopprijs €/m²
     "alleen_splitsbaar": 0,  # 1 = alleen objecten die in appartementen kunnen
     "min_units": 0,          # minimaal aantal appartementen na splitsing
+    "max_units": 0,          # maximaal aantal (0 = geen limiet). Boven ~20 is het een
+                             # ontwikkelproject: het splitsmodel rekent daar te optimistisch
 }
+
+# Vanaf hier is het geen 'splits-flip' meer maar een transformatieproject
+# (vergunningstraject, parkeernorm, jaren doorlooptijd). Cijfers dan alleen indicatief.
+ONTWIKKELPROJECT_UNITS = 20
+
+# Vanaf zoveel appartementen rekenen we niet meer met 'verkopen als één woning'
+FLIP_MAX_UNITS = 4
+
+# Boven dit oppervlak hoort een object in het tabblad 'Grote projecten'
+PROJECT_M2 = 1200
 
 SEED_PROFILES = {
     "standaard":    {},
@@ -281,8 +293,13 @@ def scenario_table(listing: dict, params: dict, city_median: float | None,
             "netto_pct": round(jaarhuur * (1 - p["opex_pct"] / 100) / inv_split * 100, 1)
                          if inv_split else None,
         }
-        # Beste strategie op mid-scenario (splitsen alleen als toegestaan)
-        cand = [("flip", flip_mid, inv_flip, opbr_flip, row["flip_laag"])]
+        # Beste strategie op mid-scenario (splitsen alleen als toegestaan).
+        # Vanaf FLIP_MAX_UNITS appartementen is 'flip' (als één woning verkopen)
+        # geen realistische exit meer: niemand koopt een politiebureau van
+        # 1.100 m² als eengezinswoning. Dan telt alleen splitsen.
+        cand = []
+        if not (split_allowed and units >= FLIP_MAX_UNITS):
+            cand.append(("flip", flip_mid, inv_flip, opbr_flip, row["flip_laag"]))
         if split_allowed:
             cand.append(("split", split_mid, inv_split, opbr_split, row["split_laag"]))
         best = max(cand, key=lambda c: c[1])
@@ -337,7 +354,7 @@ def scenario_table(listing: dict, params: dict, city_median: float | None,
 
 def top_listings(profile_params: dict, cities: list[str] | None = None,
                  n: int = 5, min_score: int = 0, rank: str = "risk",
-                 region: str = "grote_steden") -> dict:
+                 region: str = "grote_steden", soort: str = "alles") -> dict:
     """Rangschik objecten. rank:
     'risk'  = deal_score = conservatieve nettowinst × betrouwbaarheid × motivatie (default)
     'roi'   = conservatieve ROI % op de inleg (kapitaal-efficiënt, min. moeite)
@@ -374,6 +391,13 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
             veiling = not (l.price and l.price > 0)
             if veiling and (l.source or "") not in AUCTION_SOURCES_SC:
                 continue
+            # 'koop' = echte vraagprijs, 'veiling' = gewaardeerd op max. bod.
+            # Niet door elkaar ranken: een veiling op max. bod scoort per definitie
+            # het doelrendement en verdringt anders alle koopwoningen.
+            if soort == "koop" and veiling:
+                continue
+            if soort == "veiling" and not veiling:
+                continue
             if not all_cities and (l.city or "").lower() not in city_set:
                 continue
             # Huurder blijft na de veiling: niet leeg te verbouwen/splitsen -> nooit een kans
@@ -382,7 +406,7 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
             # profielfilters (0 = uit)
             if params["min_area"] and l.living_area < params["min_area"]:
                 continue
-            if params["max_area"] and l.living_area > params["max_area"]:
+            if params["max_area"] and l.living_area > params["max_area"] and soort != "project":
                 continue
             d = l.to_dict()
             med = medians.get((l.city or "").lower())
@@ -409,10 +433,22 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
             f = tab["focus"]
             sa = tab["split"]
 
+            # Tabblad-indeling. Grote projecten apart: biedboek (overheids-
+            # inschrijvingen) en alles boven ~20 appartementen of 1.200 m² —
+            # daar rekent het splitsmodel alleen indicatief.
+            is_project = ((l.source or "") == "biedboek"
+                          or sa["units"] > ONTWIKKELPROJECT_UNITS
+                          or (l.living_area or 0) > PROJECT_M2)
+            categorie = "project" if is_project else ("veiling" if veiling else "koop")
+            if soort != "alles" and categorie != soort:
+                continue
+
             # Splitsen is de hoofdstrategie: optioneel alleen splitsbare objecten
             if params.get("alleen_splitsbaar") and not tab["split_allowed"]:
                 continue
             if params.get("min_units") and sa["units"] < params["min_units"]:
+                continue
+            if params.get("max_units") and sa["units"] > params["max_units"] and soort != "project":
                 continue
 
             conf = _confidence(counts.get((l.city or "").lower(), 0), d)
@@ -451,6 +487,8 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
                 "best_strategie": f["best_strategie"],
                 "split_allowed": tab.get("split_allowed", True),
                 "units": sa["units"], "split_status": sa["status"],
+                "ontwikkelproject": sa["units"] > ONTWIKKELPROJECT_UNITS,
+                "categorie": categorie,
                 "split_reden": sa["reden"], "unit_m2": sa["unit_m2"],
                 "split_kosten": sa["kosten"], "split_premie": sa["premie"],
                 "split_premie_bron": sa["premie_bron"],
@@ -477,10 +515,24 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
            "oud": lambda r: (r.get("first_seen") or "")}.get(
         rank, lambda r: r["deal_score"])
     results.sort(key=key, reverse=(rank != "oud"))
+
+    # Dubbelingen eruit: veilingsites plaatsen elkaars veilingen door, dus
+    # hetzelfde object komt onder meerdere URL's binnen. Zelfde stad + zelfde
+    # oppervlak + zelfde prijs/bod = hetzelfde object; de hoogst gerankte blijft.
+    uniek, gezien = [], set()
+    for r in results:
+        sleutel = ((r.get("city") or "").strip().lower(), round(r.get("living_area") or 0),
+                   round((r.get("price") or r.get("max_bod") or 0) / 1000))
+        if sleutel in gezien:
+            continue
+        gezien.add(sleutel)
+        uniek.append(r)
+    results = uniek
     return {
         "generated": dt.datetime.utcnow().isoformat(),
         "params": params,
         "rank": rank,
+        "soort": soort,
         "region": region if not cities else "custom",
         "cities": sorted(city_set) if not all_cities else "alle",
         "beoordeeld": len(results),

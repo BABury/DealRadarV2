@@ -156,7 +156,7 @@ class Browser:
 
     def __init__(self):
         self._pw = self._browser = self._ctx = None
-        self.min_delay = float(os.getenv("FUNDA_DETAIL_DELAY", "2.0"))
+        self.min_delay = float(os.getenv("FUNDA_DETAIL_DELAY", "4.0"))   # rustig tempo: Funda blokkeert op snelheid
         self.max_delay = self.min_delay * 2
 
     def __enter__(self):
@@ -270,12 +270,111 @@ def _veiling_steden(bekende: list[str]) -> list[str]:
     return extra[:int(os.getenv("FUNDA_EXTRA_CITIES_MAX", "12"))]
 
 
+def _rotatie(cities: list[str]) -> list[str]:
+    """Per run maar een paar steden, en elke run de volgende.
+
+    Funda blokkeert niet op IP maar op tempo: na ±200 pagina's in een half uur
+    ging de deur dicht (eerste cloud-run, 14 sept). Door steeds FUNDA_CITIES_PER_RUN
+    steden te doen en meerdere runs per dag te plannen blijven we eronder, en
+    komt toch elke stad regelmatig langs. De positie volgt uit het aantal eerdere
+    Funda-runs in de database, dus dit overleeft herstarts."""
+    per_run = int(os.getenv("FUNDA_CITIES_PER_RUN", "4"))
+    if per_run <= 0 or per_run >= len(cities):
+        return cities
+    try:
+        from ..db import ScrapeRun, SessionLocal
+        with SessionLocal() as s:
+            n = s.query(ScrapeRun).filter(ScrapeRun.source == "funda").count()
+    except Exception:
+        n = 0
+    start = (n * per_run) % len(cities)
+    keuze = (cities + cities)[start:start + per_run]
+    print(f"[funda-browser] rotatie: run {n + 1}, steden {start + 1}-{start + per_run} "
+          f"van {len(cities)}: {', '.join(keuze)}", flush=True)
+    return keuze
+
+
+# JS dat op een ZOEKpagina elk woningkaartje uitleest (15 per pagina).
+# Per unieke detail-link: het grootste omsluitende element dat alleen díe
+# woning bevat en zowel een prijs als m² toont.
+CARDS_JS = """() => {
+  const uniq = el => new Set([...el.querySelectorAll('a[href*="/detail/koop/"]')]
+                    .map(a => a.getAttribute('href').split('?')[0])).size;
+  const seen = new Set(), out = [];
+  for (const a of document.querySelectorAll('a[href*="/detail/koop/"]')) {
+    const href = a.getAttribute('href').split('?')[0];
+    if (seen.has(href)) continue;
+    let el = a, best = null;
+    for (let i = 0; i < 10 && el; i++) {
+      if (uniq(el) > 1) break;
+      const t = el.innerText || '';
+      if (/€/.test(t) && /m²/.test(t)) best = el;
+      el = el.parentElement;
+    }
+    if (!best) continue;
+    seen.add(href);
+    out.push({href, tekst: best.innerText});
+  }
+  const m = (document.body.innerText.match(/([\\d.]+)\\s*koopwoningen/) || [])[1] || null;
+  return {kaarten: out, totaal: m};
+}"""
+
+_PC_RE = re.compile(r"^(\d{4}\s?[A-Z]{2})\s+(.+)$")
+_LABEL_RE = re.compile(r"^(A\+{0,4}|[B-G])$")
+
+
+def parse_card(href: str, tekst: str) -> dict | None:
+    """Woningkaartje -> basisgegevens. Geen detailpagina nodig.
+    Kaartje-opbouw (sept 2026): … | € 485.000 k.k. | Obrechtlaan 6 |
+    5654 GH Eindhoven | 119 m² | 147 m² | 4 | A++ | slogan | makelaar"""
+    delen = [d.strip() for d in (tekst or "").split("\n") if d.strip()]
+    i = next((k for k, d in enumerate(delen) if d.startswith("€")), None)
+    if i is None:
+        return None
+    prijs = _euro(delen[i])
+    if not prijs:
+        return None                      # 'prijs op aanvraag' e.d.
+    adres = delen[i + 1] if i + 1 < len(delen) else ""
+    postcode, plaats = "", ""
+    if i + 2 < len(delen):
+        m = _PC_RE.match(delen[i + 2])
+        if m:
+            postcode, plaats = m.group(1), m.group(2)
+    m2s = [_m2(d) for d in delen[i + 2:] if d.endswith("m²")]
+    wonen = m2s[0] if m2s else None
+    perceel = m2s[1] if len(m2s) > 1 else None
+    label = next((d for d in delen[i + 2:] if _LABEL_RE.match(d)), "")
+    if not wonen:
+        return None
+    url = (BASE + href) if href.startswith("/") else href
+    soort = "Appartement" if "/appartement-" in url else "Woonhuis"
+    if not plaats:
+        m = re.search(r"/detail/koop/([^/]+)/", url)
+        plaats = m.group(1).replace("-", " ").title() if m else ""
+    return {
+        "source": "funda", "url": url.split("?")[0], "address": adres[:300],
+        "city": plaats[:100], "postcode": postcode,
+        "price": prijs, "living_area": wonen, "plot_area": perceel,
+        "price_m2": round(prijs / wonen), "property_type": soort,
+        "energy_label": label,
+    }
+
+
 def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
-    """Scrape actief woningaanbod per stad via de browser."""
+    """Scrape woningaanbod per stad via de browser — in twee trappen.
+
+    1. ZOEKPAGINA'S: elk kaartje (15 per pagina) levert prijs, m², perceel,
+       adres en label. Zo ziet één pagina 15 huizen i.p.v. 1 → veel meer
+       dekking binnen Funda's tempogrens (±200 pagina's per half uur).
+       Bekende huizen krijgen een prijs-update (→ prijsverlaging-signaal).
+    2. DETAILPAGINA'S alleen voor de veelbelovendste nieuwe huizen (laagste
+       €/m² eerst): bouwjaar, woonlagen en omschrijving (splits-/verbouwtaal).
+    Alles telt mee in één paginabudget per run."""
     max_price = int(os.getenv("FUNDA_MAX_PRICE", "10000000"))   # geen plafond (splitsdoel)
-    max_per_city = int(os.getenv("FUNDA_MAX_PER_CITY", "40"))
-    max_pages = int(os.getenv("FUNDA_MAX_PAGES", "10"))
-    stad_timeout = float(os.getenv("SCRAPE_CITY_TIMEOUT", "600"))
+    max_pages = int(os.getenv("FUNDA_MAX_PAGES", "40"))          # zoekpagina's per stad
+    budget = int(os.getenv("FUNDA_PAGE_BUDGET", "110"))          # pagina's per run (alle steden)
+    max_details = int(os.getenv("FUNDA_MAX_DETAILS", "6"))       # detailpagina's per stad
+    stad_timeout = float(os.getenv("SCRAPE_CITY_TIMEOUT", "900"))
 
     from ..db import Listing, SessionLocal
     with SessionLocal() as s:
@@ -288,73 +387,81 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
     if extra:
         print(f"[funda-browser] + veilingsteden voor marktprijzen: {', '.join(extra)}", flush=True)
         cities = cities + extra
+    cities = _rotatie(cities)
     if on_total:
         on_total(len(cities))
 
     alles: list[dict] = []
     geblokkeerd_op_rij = 0
+    gebruikt = 0
     with Browser() as br:
-        for city in cities:
-            # Noodstop: blokkeert Funda dit IP (bv. een datacenter), dan niet
-            # elke stad opnieuw proberen — dat kost alleen tijd.
-            if geblokkeerd_op_rij >= 2:
-                print(f"[funda-browser] Funda blokkeert dit IP — {city} en verder overgeslagen",
-                      flush=True)
+        for n_stad, city in enumerate(cities):
+            if geblokkeerd_op_rij >= 2 or gebruikt >= budget:
+                reden = ("Funda blokkeert dit IP" if geblokkeerd_op_rij >= 2
+                         else f"paginabudget ({budget}) op")
+                print(f"[funda-browser] {reden} — {city} overgeslagen", flush=True)
                 if sink:
                     try:
-                        sink(city, [], "blocked")
+                        sink(city, [], "blocked" if geblokkeerd_op_rij >= 2 else "skipped")
                     except Exception:
                         pass
                 continue
+            # eerlijk verdelen: elke resterende stad een gelijk deel van het budget
+            stad_budget = max(3, (budget - gebruikt) // (len(cities) - n_stad))
             deadline = time.time() + stad_timeout
-            stad_items: list[dict] = []
-            status = "ok"
+            per_url: dict[str, dict] = {}
+            nieuwe: list[dict] = []
+            status, pagina, totaal = "ok", 0, None
             try:
-                # 1. object-URLs verzamelen
-                urls: list[str] = []
+                # ── trap 1: zoekpagina's (15 huizen per pagina) ──
+                zoek_budget = max(1, stad_budget - max_details)
                 for p in range(1, max_pages + 1):
-                    if time.time() > deadline or len(urls) >= max_per_city:
+                    if pagina >= zoek_budget or time.time() > deadline:
                         break
-                    html, _ = br.open(search_url(city, max_price, p))
-                    if html is None:
+                    _, data = br.open(search_url(city, max_price, p), evaluate=CARDS_JS)
+                    pagina += 1
+                    if data is None:
                         status = "blocked"
                         break
                     if p == 1:
-                        # Laat zien hoeveel Funda er vindt mét filters — zo zie je
-                        # in de log of prijs/oppervlak/type-filter zijn toegepast.
-                        m = re.search(r"([\d.]+)\s*koopwoningen", html)
-                        print(f"[funda-browser] {city}: Funda meldt "
-                              f"{m.group(1) if m else '?'} woningen binnen de filters",
-                              flush=True)
-                    gevonden = re.findall(r'href="(/detail/koop/[^"]+)"', html)
-                    nieuw = [BASE + u.split("?")[0] for u in dict.fromkeys(gevonden)]
-                    nieuw = [u for u in nieuw if u not in urls]
-                    if not nieuw:
+                        totaal = data.get("totaal")
+                    kaarten = [parse_card(k["href"], k["tekst"]) for k in data.get("kaarten") or []]
+                    kaarten = [k for k in kaarten if k and k["url"] not in per_url]
+                    if not kaarten:
                         break
-                    urls.extend(nieuw)
-                urls = [u for u in urls if u not in bekend][:max_per_city]
-                print(f"[funda-browser] {city}: {len(urls)} nieuwe objecten", flush=True)
+                    for k in kaarten:
+                        if k["url"] in bekend:
+                            # alleen prijs/m² bijwerken -> houdt prijshistorie levend
+                            per_url[k["url"]] = {**{x: k[x] for x in
+                                                    ("url", "price", "living_area", "price_m2")},
+                                                 "_update_only": True}
+                        else:
+                            per_url[k["url"]] = k
+                            nieuwe.append(k)
 
-                # 2. detailpagina's ophalen
-                for u in urls:
-                    if time.time() > deadline:
-                        print(f"[funda-browser] {city}: stad-timeout", flush=True)
+                # ── trap 2: detail voor de veelbelovendste nieuwe huizen ──
+                nieuwe.sort(key=lambda k: k.get("price_m2") or 10 ** 9)
+                for k in nieuwe[:max(0, stad_budget - pagina)]:
+                    if time.time() > deadline or status == "blocked":
                         break
-                    _, data = br.open(u, evaluate=DETAIL_JS)
-                    if not data:
-                        continue
-                    d = parse_detail(data, u)
-                    if d:
-                        stad_items.append(d)
-                        bekend.add(d["url"])
+                    _, det = br.open(k["url"], evaluate=DETAIL_JS)
+                    pagina += 1
+                    if det:
+                        d = parse_detail(det, k["url"])
+                        if d:
+                            per_url[k["url"]] = {**k, **{a: b for a, b in d.items() if b not in (None, "")}}
             except Exception as e:
                 status = "error"
                 print(f"[funda-browser] {city} fout: {str(e)[:120]}", flush=True)
 
+            gebruikt += pagina
+            stad_items = list(per_url.values())
+            bekend.update(per_url)
             geblokkeerd_op_rij = geblokkeerd_op_rij + 1 if status == "blocked" else 0
             alles.extend(stad_items)
-            print(f"[funda-browser] {city} klaar — {len(stad_items)} objecten "
-                  f"(totaal {len(alles)})", flush=True)
+            print(f"[funda-browser] {city}: Funda meldt {totaal or '?'} woningen · "
+                  f"{len(stad_items)} gezien ({len(nieuwe)} nieuw) in {pagina} pagina's "
+                  f"· budget {gebruikt}/{budget}", flush=True)
             if sink:
                 try:
                     sink(city, stad_items, status)
