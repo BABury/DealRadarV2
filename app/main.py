@@ -65,6 +65,32 @@ def _run_quickscan() -> dict:
         _refresh_lock.release()
 
 
+_agent_lock = threading.Lock()
+_agent_state = {"running": False, "started": None, "last_report": None}
+
+
+def _run_agents(max_lezen: int | None = None, top_n: int | None = None) -> dict:
+    """Agent-team: leest advertenties, checkt gemeentebeleid, bekritiseert de
+    topdeals. Eigen lock (mag prima naast een scrape lopen — het is netwerk-
+    wachten, geen browserwerk) maar nooit twee rondes tegelijk."""
+    import datetime as dt
+    if not _agent_lock.acquire(blocking=False):
+        return {"status": "al bezig"}
+    _agent_state["running"] = True
+    _agent_state["started"] = dt.datetime.utcnow().isoformat()
+    try:
+        from .agents.team import run_team
+        report = run_team(max_lezen=max_lezen, top_n=top_n)
+        _agent_state["last_report"] = report
+        return report
+    except Exception as e:
+        print(f"[agents] ronde mislukt: {e}", flush=True)
+        return {"status": "error", "message": str(e)[:200]}
+    finally:
+        _agent_state["running"] = False
+        _agent_lock.release()
+
+
 def _run_sold_scrape() -> dict:
     """Verkocht-scrape (benchmarks). Zelfde lock: nooit twee scrapes tegelijk."""
     import datetime as dt
@@ -105,6 +131,13 @@ async def lifespan(app: FastAPI):
         if h.strip().isdigit():
             _scheduler.add_job(_run_scrape, CronTrigger(hour=int(h), minute=0),
                                args=[["funda"]], id=f"funda_extra_{i}", max_instances=1)
+
+    # Agent-team: kort ná de Funda-runs, zodat het nieuwe aanbod meteen gelezen
+    # en bekritiseerd wordt. Zonder ANTHROPIC_API_KEY doen deze jobs niets.
+    for i, h in enumerate(os.getenv("AGENT_HOURS", "7,18").split(",")):
+        if h.strip().isdigit():
+            _scheduler.add_job(_run_agents, CronTrigger(hour=int(h), minute=30),
+                               id=f"agents_{i}", max_instances=1)
 
     qs_min = int(os.getenv("QUICKSCAN_MINUTES", "0"))   # pyfunda-API is geblokkeerd -> standaard uit
     if qs_min > 0:
@@ -421,6 +454,60 @@ def alerts_run(region: str = Query(default=""), limit: int = Query(default=25, l
     """Controleer nu op nieuwe topdeals en meld ze."""
     from .notify import check_and_alert
     return check_and_alert(region=region, limit=limit)
+
+
+@app.get("/api/agents/status")
+def agents_status():
+    """Staat het agent-team aan, wat heeft het gekost, en wat weet het al?"""
+    from .agents import status as agent_status
+    from .db import agent_kosten_overzicht, gemeente_regels_alle
+    st = agent_status()
+    try:
+        regels = gemeente_regels_alle()
+    except Exception:
+        regels = []
+    return {**st, **_agent_state,
+            "gemeenten_bekend": len(regels),
+            "kosten_per_dag": agent_kosten_overzicht(7),
+            "uren": os.getenv("AGENT_HOURS", "7,18")}
+
+
+@app.post("/api/agents/run")
+def agents_run(max_lezen: int = Query(default=0, le=500),
+               top_n: int = Query(default=0, le=25)):
+    """Laat het team nu een ronde doen (leest, checkt beleid, bekritiseert)."""
+    from .agents import agents_enabled
+    if not agents_enabled():
+        return JSONResponse(
+            {"error": "Geen ANTHROPIC_API_KEY ingesteld. Zet die als variabele "
+                      "in Railway; zonder key werkt de app zoals voorheen."},
+            status_code=400)
+    threading.Thread(target=_run_agents,
+                     args=(max_lezen or None, top_n or None), daemon=True).start()
+    return {"status": "gestart"}
+
+
+@app.get("/api/gemeente-regels")
+def gemeente_regels_ep(city: str = Query(default="")):
+    """Splitsbeleid per gemeente, zoals de Regelchecker het vond."""
+    from .db import gemeente_regel, gemeente_regels_alle
+    if city:
+        return gemeente_regel(city) or {}
+    return gemeente_regels_alle()
+
+
+@app.post("/api/gemeente-regels")
+def gemeente_regels_check(city: str = Query(min_length=2),
+                          forceer: bool = Query(default=False)):
+    """Zoek het splitsbeleid van één gemeente nu op (kost een paar cent)."""
+    from .agents import AgentUit
+    from .agents.regels import check
+    try:
+        return check(city, forceer=forceer)
+    except AgentUit as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"Regelcheck mislukt: {e}"}, status_code=502)
 
 
 @app.post("/api/rescore")

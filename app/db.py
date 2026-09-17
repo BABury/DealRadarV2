@@ -5,7 +5,8 @@ import datetime as dt
 import json
 import os
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy import (Boolean, DateTime, Float, Integer, String, Text,
+                        create_engine, func)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./flipradar.db")
@@ -99,6 +100,16 @@ class Listing(Base):
     bench_median: Mapped[float] = mapped_column(Float, nullable=True)
     discount_pct: Mapped[float] = mapped_column(Float, nullable=True)
 
+    # Oordeel van het agent-team (leeg zolang er geen ANTHROPIC_API_KEY is).
+    # ai_splits: 'ja' | 'nee' | 'onzeker' — wat de tekst zegt over splitsen.
+    ai_splits: Mapped[str] = mapped_column(String(10), default="")
+    ai_units: Mapped[int] = mapped_column(Integer, nullable=True)
+    ai_punten: Mapped[int] = mapped_column(Integer, nullable=True)   # -20..+20
+    ai_samenvatting: Mapped[str] = mapped_column(Text, default="")
+    ai_bevinding: Mapped[str] = mapped_column(Text, default="")      # volle JSON
+    ai_advies: Mapped[str] = mapped_column(String(20), default="")   # criticus
+    ai_checked: Mapped[dt.datetime] = mapped_column(DateTime, nullable=True)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -147,6 +158,13 @@ class Listing(Base):
             "bench_label": self.bench_label,
             "bench_median": self.bench_median,
             "discount_pct": self.discount_pct,
+            "ai_splits": self.ai_splits or "",
+            "ai_units": self.ai_units,
+            "ai_punten": self.ai_punten,
+            "ai_samenvatting": self.ai_samenvatting or "",
+            "ai_advies": self.ai_advies or "",
+            "ai_bevinding": json.loads(self.ai_bevinding) if self.ai_bevinding else None,
+            "ai_checked": self.ai_checked.isoformat() if self.ai_checked else None,
         }
 
 
@@ -214,6 +232,52 @@ class AlertSent(Base):
     sent: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
 
+class GemeenteRegel(Base):
+    """Splitsbeleid per gemeente, uitgezocht door de Regelchecker.
+
+    Dit is de duurste informatie per object én de minst veranderlijke: beleid
+    wijzigt een paar keer per jaar, dus één keer opzoeken per gemeente en
+    hergebruiken. Amsterdam en Utrecht verbieden splitsen grotendeels,
+    Rotterdam staat het vaak toe — dat verschil bepaalt of een 'splitsdeal'
+    bestaat of niet.
+    """
+    __tablename__ = "gemeente_regels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    city: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    toegestaan: Mapped[str] = mapped_column(String(24), default="onbekend")
+    # ja | ja_met_vergunning | beperkt | nee | onbekend
+    vergunning_nodig: Mapped[bool] = mapped_column(Boolean, default=True)
+    min_woning_m2: Mapped[float] = mapped_column(Float, nullable=True)
+    zekerheid: Mapped[str] = mapped_column(String(10), default="laag")
+    samenvatting: Mapped[str] = mapped_column(Text, default="")
+    details: Mapped[str] = mapped_column(Text, default="{}")
+    bronnen: Mapped[str] = mapped_column(Text, default="[]")
+    updated: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        return {"city": self.city, "toegestaan": self.toegestaan,
+                "vergunning_nodig": self.vergunning_nodig,
+                "min_woning_m2": self.min_woning_m2, "zekerheid": self.zekerheid,
+                "samenvatting": self.samenvatting,
+                "details": json.loads(self.details or "{}"),
+                "bronnen": json.loads(self.bronnen or "[]"),
+                "updated": self.updated.isoformat() if self.updated else None}
+
+
+class AgentKosten(Base):
+    """Dagteller voor modelkosten — de rem op de agents."""
+    __tablename__ = "agent_kosten"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dag: Mapped[str] = mapped_column(String(10), index=True)
+    agent: Mapped[str] = mapped_column(String(30), default="")
+    usd: Mapped[float] = mapped_column(Float, default=0.0)
+    tok_in: Mapped[int] = mapped_column(Integer, default=0)
+    tok_out: Mapped[int] = mapped_column(Integer, default=0)
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class ScrapeRun(Base):
     __tablename__ = "scrape_runs"
 
@@ -239,7 +303,14 @@ def init_db() -> None:
                             "bench_median": "FLOAT",
                             "discount_pct": "FLOAT",
                             "published": "VARCHAR(40) DEFAULT ''",
-                            "floors": "INTEGER"}.items():
+                            "floors": "INTEGER",
+                            "ai_splits": "VARCHAR(10) DEFAULT ''",
+                            "ai_units": "INTEGER",
+                            "ai_punten": "INTEGER",
+                            "ai_samenvatting": "TEXT",
+                            "ai_bevinding": "TEXT",
+                            "ai_advies": "VARCHAR(20) DEFAULT ''",
+                            "ai_checked": "TIMESTAMP"}.items():
             if _name not in existing:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE listings ADD COLUMN {_name} {_ddl}"))
@@ -250,7 +321,85 @@ def init_db() -> None:
 _UPDATABLE = {
     c.name for c in Listing.__table__.columns
 } - {"id", "first_seen", "last_seen", "price_history", "flip_score", "score_breakdown",
-     "bench_label", "bench_median", "discount_pct"}
+     "bench_label", "bench_median", "discount_pct",
+     # Het oordeel van de agents hoort niet bij een scrape-update: dat zou het
+     # bij elke herhaalde scrape wissen.
+     "ai_splits", "ai_units", "ai_punten", "ai_samenvatting", "ai_bevinding",
+     "ai_advies", "ai_checked"}
+
+
+def boek_agent_kosten(agent: str, usd: float, tok_in: int, tok_out: int) -> None:
+    """Telt modelkosten per dag per agent op (de rem in agents/__init__.py)."""
+    dag = dt.date.today().isoformat()
+    with SessionLocal() as s:
+        row = s.query(AgentKosten).filter_by(dag=dag, agent=agent).one_or_none()
+        if row is None:
+            row = AgentKosten(dag=dag, agent=agent)
+            s.add(row)
+        row.usd = (row.usd or 0) + usd
+        row.tok_in = (row.tok_in or 0) + tok_in
+        row.tok_out = (row.tok_out or 0) + tok_out
+        row.calls = (row.calls or 0) + 1
+        s.commit()
+
+
+def agent_kosten_vandaag() -> float:
+    from sqlalchemy import func as _f
+    dag = dt.date.today().isoformat()
+    with SessionLocal() as s:
+        return float(s.query(_f.coalesce(_f.sum(AgentKosten.usd), 0.0))
+                     .filter(AgentKosten.dag == dag).scalar() or 0.0)
+
+
+def agent_kosten_overzicht(dagen: int = 7) -> list[dict]:
+    from sqlalchemy import func as _f
+    grens = (dt.date.today() - dt.timedelta(days=dagen)).isoformat()
+    with SessionLocal() as s:
+        rows = (s.query(AgentKosten.dag, AgentKosten.agent,
+                        _f.sum(AgentKosten.usd), _f.sum(AgentKosten.calls))
+                .filter(AgentKosten.dag >= grens)
+                .group_by(AgentKosten.dag, AgentKosten.agent)
+                .order_by(AgentKosten.dag.desc()).all())
+        return [{"dag": d, "agent": a, "usd": round(float(u or 0), 4),
+                 "calls": int(c or 0)} for d, a, u, c in rows]
+
+
+def gemeente_regel(city: str) -> dict | None:
+    if not city:
+        return None
+    with SessionLocal() as s:
+        row = (s.query(GemeenteRegel)
+               .filter(func.lower(GemeenteRegel.city) == city.lower())
+               .one_or_none())
+        return row.to_dict() if row else None
+
+
+def gemeente_regels_alle() -> list[dict]:
+    with SessionLocal() as s:
+        return [r.to_dict() for r in
+                s.query(GemeenteRegel).order_by(GemeenteRegel.city).all()]
+
+
+def gemeente_regel_opslaan(city: str, data: dict) -> dict:
+    """Schrijft/ververst het splitsbeleid van één gemeente."""
+    with SessionLocal() as s:
+        row = (s.query(GemeenteRegel)
+               .filter(func.lower(GemeenteRegel.city) == city.lower())
+               .one_or_none())
+        if row is None:
+            row = GemeenteRegel(city=city.lower())
+            s.add(row)
+        row.toegestaan = (data.get("toegestaan") or "onbekend")[:24]
+        row.vergunning_nodig = bool(data.get("vergunning_nodig", True))
+        mm = data.get("min_woning_m2")
+        row.min_woning_m2 = float(mm) if isinstance(mm, (int, float)) else None
+        row.zekerheid = (data.get("zekerheid") or "laag")[:10]
+        row.samenvatting = data.get("samenvatting") or ""
+        row.details = json.dumps(data.get("details") or {}, ensure_ascii=False)
+        row.bronnen = json.dumps(data.get("bronnen") or [], ensure_ascii=False)
+        row.updated = dt.datetime.utcnow()
+        s.commit()
+        return row.to_dict()
 
 
 def upsert_listings(items: list[dict]) -> tuple[int, int]:

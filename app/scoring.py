@@ -131,6 +131,22 @@ def score_listing(l: Listing, bm: BenchmarkMap) -> tuple[int, list[str], dict]:
                 bd.append(f"{dom} dagen te koop (+{p})")
                 break
 
+    # Oordeel van het agent-team. De Lezer beoordeelt de tekst, de Criticus
+    # zoekt bezwaren; samen begrensd op -35..+20 (zie agents/criticus.py), zodat
+    # de harde cijfers de basis blijven en het team bijstuurt.
+    if l.ai_punten is not None or l.ai_samenvatting:
+        p = max(-35, min(20, int(l.ai_punten or 0)))
+        pts += p
+        kern = (l.ai_samenvatting or "oordeel agent-team").strip()
+        teken = "+" if p > 0 else ""
+        # Ook bij 0 punten tonen: dan heeft het team het gezien en niets
+        # bijzonders gevonden, en dat is óók informatie.
+        bd.append(f"🤖 {kern[:110]} ({teken}{p})")
+    advies = {"laten_lopen": "🤖 criticus: laten lopen",
+              "uitzoeken": "🤖 criticus: eerst uitzoeken"}.get(l.ai_advies or "")
+    if advies:
+        bd.append(advies)
+
     ctx = (l.context or "").lower()
     if l.source in AUCTION_SOURCES:
         if "[executieveiling]" in ctx:

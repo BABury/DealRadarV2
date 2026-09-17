@@ -121,6 +121,12 @@ def _deal_text(o: dict) -> tuple[str, str, str]:
     tags = o.get("motivated_tags") or []
     if tags:
         regels.append("🔥 " + ", ".join(tags))
+    # Wat het agent-team ervan vond (leeg zolang er geen ANTHROPIC_API_KEY is)
+    ag = _agent_oordeel(o.get("id") or 0)
+    if ag.get("samenvatting"):
+        regels.append(f"🤖 {ag['samenvatting']}")
+    if ag.get("advies") == "uitzoeken":
+        regels.append("🤖 Criticus: eerst uitzoeken — zie dashboard voor de vragen")
     url = o.get("url") or ""
     if url:
         regels.append(url)
@@ -144,6 +150,25 @@ def _mark_sent(listing_id: int, score: int) -> None:
         s.commit()
 
 
+def _agent_oordeel(listing_id: int) -> dict:
+    """Oordeel van het agent-team bij één object (leeg als het team uit staat)."""
+    from .db import Listing, SessionLocal
+    try:
+        with SessionLocal() as s:
+            row = s.get(Listing, listing_id)
+            if not row:
+                return {}
+            return {"advies": row.ai_advies or "", "splits": row.ai_splits or "",
+                    "samenvatting": row.ai_samenvatting or ""}
+    except Exception:
+        return {}
+
+
+def _agent_ok(o: dict) -> bool:
+    a = _agent_oordeel(o.get("id") or 0)
+    return a.get("advies") != "laten_lopen"
+
+
 def check_and_alert(region: str = "", profile: str = "",
                     limit: int = 25) -> dict:
     """Zoek nieuwe topdeals en stuur er een melding over. Idempotent.
@@ -165,6 +190,14 @@ def check_and_alert(region: str = "", profile: str = "",
                   and (o.get("roi_laag_pct") or 0) >= min_roi]
     if not kandidaten:
         return {"status": "ok", "nieuw": 0, "bekeken": len(data["top"])}
+
+    # Waar het agent-team 'laten lopen' adviseert, geen melding: dat is precies
+    # het soort moeite dat we willen vermijden. In het dashboard blijft hij
+    # staan, met de bezwaren erbij.
+    kandidaten = [o for o in kandidaten if _agent_ok(o)]
+    if not kandidaten:
+        return {"status": "ok", "nieuw": 0, "bekeken": len(data["top"]),
+                "afgeraden_door_criticus": True}
 
     sent_ids = _already_sent([o["id"] for o in kandidaten])
     nieuw = [o for o in kandidaten if o["id"] not in sent_ids]

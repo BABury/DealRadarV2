@@ -83,7 +83,9 @@
   </div>
   <div class="right">
     <span id="lastupdate" class="muted" style="font-size:12px"></span>
+    <span id="agentstatus" class="muted" style="font-size:12px"></span>
     <button onclick="toggleUitleg()">ℹ Hoe werkt de score?</button>
+    <button id="btn-agents" onclick="runAgents()" title="Laat het agent-team nieuwe objecten lezen, gemeentebeleid checken en de topdeals bekritiseren">🤖 Agents</button>
     <button onclick="refresh()">↻ Nieuwe scrape</button>
   </div>
 </header>
@@ -105,6 +107,7 @@
       <div class="card"><b>Prijsverlagingen</b> <span style="float:right;color:var(--accent)">tot 10 pt</span><div class="muted">2x of vaker verlaagd = 10 · 1x = 6. Automatisch bijgehouden per dagelijkse scrape — hét signaal van een gemotiveerde verkoper.</div></div>
       <div class="card"><b>Veiling</b> <span style="float:right;color:var(--accent)">8 pt</span><div class="muted">Executieveiling of openbare inschrijving = gedwongen/gemotiveerde verkoop, vaak onder marktprijs.</div></div>
       <div class="card"><b>Geen erfpacht</b> <span style="float:right;color:var(--accent)">5 pt</span><div class="muted">Volle eigendom verkoopt makkelijker door en financiert eenvoudiger.</div></div>
+      <div class="card"><b>🤖 Agent-team</b> <span style="float:right;color:var(--warn)">−35 tot +20 pt</span><div class="muted">Drie agents lezen wat de cijfers niet zien. <b>Lezer</b>: begrijpt de omschrijving, dus "niet te splitsen" telt niet meer als kans, en ziet aparte opgang, monumentstatus of een zittende huurder. <b>Regelchecker</b>: zoekt per gemeente het splitsbeleid op — in Amsterdam mag splitsen vaak niet, in Rotterdam meestal wel, en dat weegt mee in de zekerheid. <b>Criticus</b>: moet de topdeals afbranden en levert de vragen die je vóór een bod stelt. Rekenen doen ze nooit; dat blijft het model. Klik een object open voor hun verslag met bronnen.</div></div>
     </div>
     <div class="muted" style="margin-top:12px; font-size:13px;">
       Kleuren: <span class="score s-hot" style="font-size:12px">≥ 60</span> hot lead — direct bellen ·
@@ -247,9 +250,14 @@
 const fmt = n => n == null ? "–" : "€" + Math.round(n).toLocaleString("nl-NL");
 let t = null;
 let cityStats = {};
+let gemeenteRegels = {};   // splitsbeleid per gemeente (agent Regelchecker)
 
 async function loadCityStats() {
   try { cityStats = await (await fetch("/api/city-stats")).json(); } catch (e) {}
+  try {
+    const rg = await (await fetch("/api/gemeente-regels")).json();
+    if (Array.isArray(rg)) rg.forEach(r => gemeenteRegels[(r.city || "").toLowerCase()] = r);
+  } catch (e) {}
 }
 function gevondenCel(iso) {
   if (!iso) return '<span class="muted">–</span>';
@@ -262,6 +270,24 @@ function gevondenCel(iso) {
   return `<span style="color:${kleur}; white-space:nowrap">${d.toLocaleDateString("nl-NL")}</span>
           <div class="muted" style="font-size:11px">${wanneer}</div>`;
 }
+// Oordeel van het agent-team, kort in de kolom Signalen. Tooltip toont
+// waar het oordeel op gebaseerd is, zodat je het kunt controleren.
+function aiChip(r) {
+  if (!r.ai_splits && !r.ai_samenvatting) return "";
+  const b = r.ai_bevinding || {};
+  const kleur = { ja: "var(--accent)", nee: "var(--hot)", onzeker: "var(--warn)" }[r.ai_splits] || "var(--muted)";
+  const tekst = { ja: "🤖 splitsbaar", nee: "🤖 niet splitsbaar", onzeker: "🤖 onzeker" }[r.ai_splits] || "🤖 gelezen";
+  const tip = [r.ai_samenvatting,
+               b.bewijs ? `Bewijs: "${b.bewijs}"` : "",
+               (b.risicos || []).length ? "Risico: " + b.risicos.join("; ") : "",
+               r.ai_punten != null ? `Score-effect: ${r.ai_punten > 0 ? "+" : ""}${r.ai_punten}` : ""]
+              .filter(Boolean).join("\n").replace(/"/g, "&quot;");
+  const advies = { laten_lopen: '<span class="chip" style="color:var(--hot)">laten lopen</span>',
+                   uitzoeken: '<span class="chip" style="color:var(--warn)">eerst uitzoeken</span>',
+                   doorgaan: '<span class="chip" style="color:var(--accent)">doorgaan</span>' }[r.ai_advies] || "";
+  return `<span class="chip on" style="color:${kleur}" title="${tip}">${tekst}</span>${advies}`;
+}
+
 function debounceLoad() { clearTimeout(t); t = setTimeout(load, 300); }
 
 async function loadStats() {
@@ -314,7 +340,7 @@ async function load() {
              ${r.discount_pct > 0 ? "-" : "+"}${Math.abs(r.discount_pct)}%</b>`}</td>
       <td>${r.energy_label ? `<span class="label lab-${r.energy_label[0]}">${r.energy_label}</span>` : "–"}</td>
       <td>${r.build_year || "–"}</td>
-      <td>${flags || '<span class="muted">–</span>'}</td>
+      <td>${aiChip(r)}${flags || (aiChip(r) ? "" : '<span class="muted">–</span>')}</td>
       <td>${gevondenCel(r.first_seen)}</td>
       <td><span class="badge-src ${auction ? "auction" : ""}">${r.source}</span>
           ${r.auction_date ? `<div class="muted" style="font-size:11px">${r.auction_date}</div>` : ""}</td>
@@ -376,6 +402,95 @@ function renderAnalyseHtml(r) {
     <div class="muted" style="margin-top:10px; font-size:12px;">${v.aanbouw_regel ? "Regel: " + v.aanbouw_regel + " · " : ""}${r.disclaimer || ""}</div>`;
 }
 
+async function loadAgentStatus() {
+  const el = document.getElementById("agentstatus");
+  const btn = document.getElementById("btn-agents");
+  if (!el) return;
+  try {
+    const s = await (await fetch("/api/agents/status")).json();
+    if (!s.aan) {
+      el.innerHTML = '<span title="Zet ANTHROPIC_API_KEY als variabele in Railway om het agent-team aan te zetten">🤖 agents uit</span>';
+      if (btn) btn.disabled = true;
+      return;
+    }
+    if (btn) btn.disabled = false;
+    const bezig = s.running ? " · bezig…" : "";
+    el.innerHTML = `<span title="Dagbudget $${s.dagbudget_usd} · ${s.gemeenten_bekend} gemeenten uitgezocht · rondes om ${s.uren} uur">` +
+      `🤖 agents aan · $${(s.vandaag_usd || 0).toFixed(2)} vandaag${bezig}</span>`;
+    if (s.running) setTimeout(loadAgentStatus, 8000);
+  } catch (e) { el.textContent = ""; }
+}
+
+async function runAgents() {
+  const btn = document.getElementById("btn-agents");
+  if (btn) { btn.disabled = true; btn.textContent = "🤖 bezig…"; }
+  try {
+    const r = await (await fetch("/api/agents/run", { method: "POST" })).json();
+    if (r.error) alert(r.error);
+  } catch (e) { alert("Agents starten mislukt."); }
+  setTimeout(() => {
+    if (btn) { btn.textContent = "🤖 Agents"; }
+    loadAgentStatus();
+  }, 3000);
+  // Het team herscoort zelf; na een minuut is het resultaat zichtbaar.
+  setTimeout(() => { loadCityStats().then(load); }, 60000);
+}
+
+// Volledig verslag van het agent-team onder een object.
+function aiBlok(r) {
+  const b = r.ai_bevinding || {};
+  const c = b.criticus || null;
+  const g = gemeenteRegels[(r.city || "").toLowerCase()];
+  if (!r.ai_checked && !g) return "";
+
+  const rij = (k, v) => v ? `<tr><td class="muted" style="padding:2px 10px 2px 0; white-space:nowrap">${k}</td><td>${v}</td></tr>` : "";
+  const ernstKleur = { hoog: "var(--hot)", midden: "var(--warn)", laag: "var(--muted)" };
+
+  const lezer = r.ai_checked ? `
+    <b>Lezer</b> <span class="muted">— wat er in de tekst staat</span>
+    <table style="font-size:12px; margin:6px 0 12px;">
+      ${rij("oordeel", r.ai_splits ? `splitsbaar: <b>${r.ai_splits}</b>${r.ai_units ? ` · ${r.ai_units} app.` : ""}` : "")}
+      ${rij("bewijs", b.bewijs ? `<i>"${b.bewijs}"</i>` : "")}
+      ${rij("opgang", b.aparte_opgang)}
+      ${rij("staat", [b.staat, b.verbouwzwaarte && `verbouwing ${b.verbouwzwaarte}`].filter(Boolean).join(" · "))}
+      ${rij("monument", b.monument && b.monument !== "nee" ? b.monument : "")}
+      ${rij("huursituatie", b.verhuurd && b.verhuurd !== "leeg" ? b.verhuurd : "")}
+      ${rij("risico's", (b.risicos || []).join(" · "))}
+      ${rij("kansen", (b.kansen || []).join(" · "))}
+    </table>` : "";
+
+  const gem = g ? `
+    <b>Regelchecker</b> <span class="muted">— splitsbeleid ${r.city}</span>
+    <table style="font-size:12px; margin:6px 0 12px;">
+      ${rij("beleid", `<b>${(g.toegestaan || "").replace(/_/g, " ")}</b>${g.vergunning_nodig ? " · vergunning nodig" : ""}`)}
+      ${rij("min. woning", g.min_woning_m2 ? g.min_woning_m2 + " m²" : "")}
+      ${rij("samenvatting", g.samenvatting)}
+      ${rij("let op", ((g.details || {}).let_op || []).join(" · "))}
+      ${rij("zekerheid", g.zekerheid)}
+      ${rij("bronnen", (g.bronnen || []).slice(0, 3).map((u, i) =>
+          `<a href="${u}" target="_blank" rel="noopener">bron ${i + 1}</a>`).join(" · "))}
+    </table>` : "";
+
+  const krit = c ? `
+    <b>Criticus</b> <span class="muted">— bezwaren tegen deze deal</span>
+    <div style="margin:6px 0 12px; font-size:12px;">
+      ${(c.rode_vlaggen || []).map(v =>
+        `<div style="margin-bottom:3px"><span style="color:${ernstKleur[v.ernst] || "var(--muted)"}">●</span>
+         <b>${v.punt}</b> <span class="muted">— ${v.waarom}</span></div>`).join("")}
+      ${(c.eerst_uitzoeken || []).length ? `<div style="margin-top:8px"><b>Eerst uitzoeken:</b>
+        <ul style="margin:4px 0 0 18px">${c.eerst_uitzoeken.map(v => `<li>${v}</li>`).join("")}</ul></div>` : ""}
+      <div style="margin-top:8px">Advies: <b>${(r.ai_advies || "").replace(/_/g, " ")}</b>
+        <span class="muted">· score-effect ${r.ai_punten > 0 ? "+" : ""}${r.ai_punten ?? 0}</span></div>
+    </div>` : "";
+
+  return `<div style="border:1px solid var(--border); border-radius:10px; padding:14px; margin-top:4px;">
+    <div style="margin-bottom:8px"><b>🤖 Agent-team</b>
+      <span class="muted" style="font-size:11px">— leest tekst en beleid; de bedragen komen uit het rekenmodel</span></div>
+    ${lezer}${gem}${krit}
+    ${!c ? '<div class="muted" style="font-size:11px">De Criticus beoordeelt alleen de topdeals.</div>' : ""}
+  </div>`;
+}
+
 async function toggleDetail(event, id) {
   if (event.target.closest("a")) return;
   const tr = document.querySelector(`tr[data-id="${id}"]`);
@@ -389,12 +504,13 @@ async function toggleDetail(event, id) {
   const photo = r.photo_url ?
     `<img src="${r.photo_url}" alt="" style="width:260px; max-height:180px; object-fit:cover; border-radius:10px; flex-shrink:0;">` :
     `<div class="muted" style="width:260px; padding:20px; text-align:center; border:1px dashed var(--border); border-radius:10px; flex-shrink:0;">geen foto — verschijnt na volgende scrape</div>`;
-  det.innerHTML = `<td colspan="12" style="background:var(--panel2); padding:18px;">
+  det.innerHTML = `<td colspan="13" style="background:var(--panel2); padding:18px;">
     <div style="display:flex; gap:18px; align-items:flex-start; flex-wrap:wrap;">
       ${photo}
       <div style="flex:1; min-width:300px;" id="det-${id}">
         <span class="muted">Potentie-analyse laden…</span>
       </div>
+      <div style="flex-basis:100%;">${aiBlok(r)}</div>
       <div style="flex-basis:100%;" id="scen-${id}"></div>
       <div style="flex-basis:100%;" id="val-${id}"></div>
     </div></td>`;
@@ -865,6 +981,8 @@ async function checkRunning() {
 }
 checkRunning();
 setInterval(checkRunning, 10000);
+loadAgentStatus();
+setInterval(loadAgentStatus, 120000);
 </script>
 </body>
 </html>
