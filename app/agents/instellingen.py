@@ -44,6 +44,12 @@ STANDAARD = {
     "rik_steden_per_ronde": 2,
     "rik_zoekopdrachten": 5,        # per stad; meer = grondiger én duurder
     "rik_geldig_dagen": 60,
+    # Funda: detailpagina's (= omschrijving voor Lotte) per stad per run.
+    # Meer = meer tekst, maar ook meer pagina's richting Funda's tempogrens.
+    "funda_details_per_stad": 12,
+    # Hoeveel focussteden per run; de rest komt de volgende run (om en om).
+    # Funda blokkeert op tempo (±200 pagina's per half uur), niet op IP.
+    "funda_steden_per_run": 2,
     # Kees (Criticus)
     "kees_aan": True,
     "kees_top_n": 3,                # per soort (koop en veiling)
@@ -59,6 +65,8 @@ GRENZEN = {
     "rik_zoekopdrachten": (1, 15),
     "rik_geldig_dagen": (7, 365),
     "kees_top_n": (0, 15),
+    "funda_details_per_stad": (0, 60),
+    "funda_steden_per_run": (1, 12),
 }
 
 # Gemeten in de eerste echte ronde (18 sept 2026); alleen voor de schatting.

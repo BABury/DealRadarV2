@@ -1017,7 +1017,8 @@ async function toonInstellingen() {
     <div style="display:grid; gap:12px;">
       <div style="border:1px solid var(--border); border-radius:10px; padding:12px 14px;">
         <b style="font-size:13px">🎯 Focussteden</b>
-        <span class="muted" style="font-size:12px">— geldt voor de hele app: tabel, top-lijsten, Telegram én het team. Buiten deze steden doet het team niets.</span>
+        <span class="muted" style="font-size:12px">— geldt voor de hele app: <b>welke steden de Funda-scraper afloopt</b>, de tabel, top-lijsten, Telegram én het team.
+          Minder steden = vaker langs en meer detailpagina's per stad.</span>
         <div id="agi-steden" style="display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:10px;">
           ${d.steden_keuze.map(c => `<label style="font-size:12px; display:inline-flex; gap:5px; align-items:center; min-width:130px;">
             <input type="checkbox" value="${c}" ${i.steden.includes(c) ? "checked" : ""} onchange="agSchatting()"> ${c}</label>`).join("")}
@@ -1027,6 +1028,12 @@ async function toonInstellingen() {
         <b style="font-size:13px">🕹 Wanneer werkt het team?</b>
         <div class="muted" style="font-size:12px; margin:4px 0 8px;">Standaard alleen op jouw opdracht: de knop bij een object, "Nu een ronde draaien", of Telegram.</div>
         ${aan("automatische_rondes", "ook zelf een ronde draaien om 7:30 en 18:30")}
+      </div>
+      <div style="border:1px solid var(--border); border-radius:10px; padding:12px 14px;">
+        <b style="font-size:13px">🏠 Funda-scraper</b>
+        <span class="muted" style="font-size:12px">— loopt 4× per dag de focussteden af (06:00, 12:00, 17:00, 22:00)</span>
+        ${num("funda_steden_per_run", "Steden per run", "de rest komt de volgende run; 2 per run = elke stad 2× per dag bij 4 steden")}
+                ${num("funda_details_per_stad", "Detailpagina's per stad", "de omschrijving die Lotte leest; meer = meer tekst, maar dichter bij Funda's tempogrens")}
       </div>
       ${blok("lezer", `${aan("lotte_aan", "Lotte leest mee")}
         ${num("lotte_per_ronde", "Objecten per ronde", "hoeveel ze per ronde leest; de rest wacht op de volgende")}

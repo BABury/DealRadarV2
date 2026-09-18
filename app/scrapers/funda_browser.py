@@ -25,10 +25,36 @@ BLOCK_MARKERS = ("je bent bijna op de pagina", "verifiëren dat onze bezoekers",
 
 
 def _cities() -> list[str]:
+    """Welke steden de scraper afloopt: de focussteden uit het dashboard.
+
+    Eén lijst voor de hele app — wat je in het dashboard als focus kiest, wordt
+    ook gescrapet. FUNDA_CITIES (Railway-variabele) gaat vóór, voor als je het
+    ooit los wilt zetten."""
     raw = os.getenv("FUNDA_CITIES", "")
-    return [c.strip().lower() for c in raw.split(",") if c.strip()] or [
-        "amsterdam", "rotterdam", "den-haag", "utrecht", "eindhoven", "haarlem",
-        "leiden", "delft", "groningen", "nijmegen", "arnhem", "zwolle"]
+    handmatig = [c.strip().lower() for c in raw.split(",") if c.strip()]
+    if handmatig:
+        return handmatig
+    try:
+        from ..agents.instellingen import lees
+        steden = [_slug(c) for c in lees()["steden"]]
+        if steden:
+            return steden
+    except Exception as e:
+        print(f"[funda-browser] focussteden niet geladen: {e}", flush=True)
+    return ["amsterdam", "rotterdam", "den-haag", "utrecht", "eindhoven", "haarlem",
+            "leiden", "delft", "groningen", "nijmegen", "arnhem", "zwolle"]
+
+
+def _max_details() -> int:
+    """Detailpagina's per stad per run. Die leveren de omschrijving waar Lotte
+    mee werkt. Instelbaar in het dashboard (FUNDA_MAX_DETAILS gaat vóór)."""
+    if os.getenv("FUNDA_MAX_DETAILS"):
+        return int(os.getenv("FUNDA_MAX_DETAILS"))
+    try:
+        from ..agents.instellingen import lees
+        return int(lees()["funda_details_per_stad"])
+    except Exception:
+        return 6
 
 
 def search_url(city: str, max_price: int, page: int = 1, sort_new: bool = True) -> str:
@@ -267,7 +293,9 @@ def _veiling_steden(bekende: list[str]) -> list[str]:
         sl = _slug(c)
         if sl not in have and sl not in extra:
             extra.append(sl)
-    return extra[:int(os.getenv("FUNDA_EXTRA_CITIES_MAX", "12"))]
+    # Standaard uit: met focussteden wil je geen objecten uit Tilburg of Breda
+    # erbij. Aanzetten kan met FUNDA_EXTRA_CITIES_MAX (bv. 12).
+    return extra[:int(os.getenv("FUNDA_EXTRA_CITIES_MAX", "0"))]
 
 
 def _rotatie(cities: list[str]) -> list[str]:
@@ -278,7 +306,14 @@ def _rotatie(cities: list[str]) -> list[str]:
     steden te doen en meerdere runs per dag te plannen blijven we eronder, en
     komt toch elke stad regelmatig langs. De positie volgt uit het aantal eerdere
     Funda-runs in de database, dus dit overleeft herstarts."""
-    per_run = int(os.getenv("FUNDA_CITIES_PER_RUN", "4"))
+    if os.getenv("FUNDA_CITIES_PER_RUN"):
+        per_run = int(os.getenv("FUNDA_CITIES_PER_RUN"))
+    else:
+        try:
+            from ..agents.instellingen import lees
+            per_run = int(lees()["funda_steden_per_run"])
+        except Exception:
+            per_run = 2
     if per_run <= 0 or per_run >= len(cities):
         return cities
     try:
@@ -373,12 +408,17 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
     max_price = int(os.getenv("FUNDA_MAX_PRICE", "10000000"))   # geen plafond (splitsdoel)
     max_pages = int(os.getenv("FUNDA_MAX_PAGES", "40"))          # zoekpagina's per stad
     budget = int(os.getenv("FUNDA_PAGE_BUDGET", "110"))          # pagina's per run (alle steden)
-    max_details = int(os.getenv("FUNDA_MAX_DETAILS", "6"))       # detailpagina's per stad
+    max_details = _max_details()                                 # detailpagina's per stad
     stad_timeout = float(os.getenv("SCRAPE_CITY_TIMEOUT", "900"))
 
     from ..db import Listing, SessionLocal
     with SessionLocal() as s:
         bekend = {u for (u,) in s.query(Listing.url).filter(Listing.source == "funda") if u}
+        # Bekende huizen zónder omschrijving: die verdienen ook een detailpagina,
+        # anders krijgt een huis dat ooit als kaartje binnenkwam nooit tekst.
+        zonder_tekst = {u for (u,) in s.query(Listing.url).filter(
+            Listing.source == "funda",
+            (Listing.context.is_(None)) | (Listing.context == "")) if u}
     print(f"[funda-browser] {len(bekend)} objecten al bekend", flush=True)
 
     cities = _cities()
@@ -439,9 +479,14 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
                             per_url[k["url"]] = k
                             nieuwe.append(k)
 
-                # ── trap 2: detail voor de veelbelovendste nieuwe huizen ──
-                nieuwe.sort(key=lambda k: k.get("price_m2") or 10 ** 9)
-                for k in nieuwe[:max(0, stad_budget - pagina)]:
+                # ── trap 2: detail voor de veelbelovendste huizen zonder tekst ──
+                # Nieuwe huizen én bekende huizen die nog geen omschrijving
+                # hebben; goedkoopste €/m² eerst, hooguit max_details per stad.
+                kandidaten = nieuwe + [k for u, k in per_url.items()
+                                       if k.get("_update_only") and u in zonder_tekst]
+                kandidaten.sort(key=lambda k: k.get("price_m2") or 10 ** 9)
+                ruimte = max(0, min(max_details, stad_budget - pagina))
+                for k in kandidaten[:ruimte]:
                     if time.time() > deadline or status == "blocked":
                         break
                     _, det = br.open(k["url"], evaluate=DETAIL_JS)
@@ -449,7 +494,10 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
                     if det:
                         d = parse_detail(det, k["url"])
                         if d:
-                            per_url[k["url"]] = {**k, **{a: b for a, b in d.items() if b not in (None, "")}}
+                            vol = {**{a: b for a, b in k.items() if a != "_update_only"},
+                                   **{a: b for a, b in d.items() if b not in (None, "")}}
+                            per_url[k["url"]] = vol
+                            zonder_tekst.discard(k["url"])
             except Exception as e:
                 status = "error"
                 print(f"[funda-browser] {city} fout: {str(e)[:120]}", flush=True)
