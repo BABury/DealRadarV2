@@ -52,7 +52,7 @@ def _kandidaten(limit: int | None = None) -> list[int]:
              .filter(Listing.is_demo.is_(False),
                      Listing.ai_checked.is_(None),
                      Listing.context.isnot(None), Listing.context != "",
-                     func.lower(Listing.city).in_(sorted(focus_varianten(ins["steden"]))),
+                     func.lower(func.trim(Listing.city)).in_(sorted(focus_varianten(ins["steden"]))),
                      Listing.living_area >= ins["lotte_min_m2"]))
         if ins["lotte_max_m2"]:
             q = q.filter(Listing.living_area <= ins["lotte_max_m2"])
@@ -90,7 +90,7 @@ def _steden_van_kanshebbers(limit: int) -> list[str]:
     with SessionLocal() as s:
         rijen = (s.query(Listing.city, func.count())
                  .filter(Listing.is_demo.is_(False),
-                         func.lower(Listing.city).in_(sorted(focus_varianten(ins["steden"]))),
+                         func.lower(func.trim(Listing.city)).in_(sorted(focus_varianten(ins["steden"]))),
                          Listing.living_area >= ins["lotte_min_m2"],
                          Listing.living_area <= (ins["lotte_max_m2"] or 10 ** 9))
                  .group_by(Listing.city).all())

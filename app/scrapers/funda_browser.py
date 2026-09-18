@@ -267,6 +267,9 @@ def diagnose(city: str = "eindhoven") -> dict:
 def _slug(city: str) -> str:
     """Funda-gebiedsnaam: 'Den Haag' -> 'den-haag'."""
     s = city.strip().lower().replace("'s-gravenhage", "den-haag")
+    # Den Bosch heet bij Funda officieel 's-Hertogenbosch
+    if s in ("den bosch", "den-bosch", "'s-hertogenbosch", "s-hertogenbosch"):
+        return "s-hertogenbosch"
     return re.sub(r"\s+", "-", s)
 
 

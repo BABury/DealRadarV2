@@ -183,7 +183,8 @@ async def lifespan(app: FastAPI):
     # nieuws online staat en melden dat direct.
     # Extra Funda-runs gespreid over de dag (elke run 4 steden, roterend).
     # Funda blokkeert op tempo, dus liever vaker kleine porties dan één grote.
-    for i, h in enumerate(os.getenv("FUNDA_HOURS", "12,17,22").split(",")):
+    # Met 6 focussteden en 2 steden per run komt zo elke stad 2× per dag langs.
+    for i, h in enumerate(os.getenv("FUNDA_HOURS", "9,12,15,18,21").split(",")):
         if h.strip().isdigit():
             _scheduler.add_job(_run_scrape, CronTrigger(hour=int(h), minute=0),
                                args=[["funda"]], id=f"funda_extra_{i}", max_instances=1)
@@ -266,7 +267,7 @@ def opportunities(
         elif focus:
             # Standaard alleen de focussteden; focus=0 toont heel Nederland
             from .agents.instellingen import focus_varianten
-            qry = qry.filter(func.lower(Listing.city).in_(sorted(focus_varianten())))
+            qry = qry.filter(func.lower(func.trim(Listing.city)).in_(sorted(focus_varianten())))
         if source:
             qry = qry.filter(Listing.source == source)
         if min_score:

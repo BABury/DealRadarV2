@@ -402,7 +402,7 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
                 continue
             if soort == "veiling" and not veiling:
                 continue
-            if not all_cities and (l.city or "").lower() not in city_set:
+            if not all_cities and (l.city or "").strip().lower() not in city_set:
                 continue
             # Huurder blijft na de veiling: niet leeg te verbouwen/splitsen -> nooit een kans
             if "huurbeding ingeroepen" in (l.context or "").lower():
