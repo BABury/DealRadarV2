@@ -279,6 +279,36 @@ class AgentKosten(Base):
     laatste: Mapped[dt.datetime] = mapped_column(DateTime, nullable=True)
 
 
+class Instelling(Base):
+    """Instellingen die je in het dashboard bijstelt (sleutel -> JSON)."""
+    __tablename__ = "instellingen"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sleutel: Mapped[str] = mapped_column(String(60), unique=True, index=True)
+    waarde: Mapped[str] = mapped_column(Text, default="{}")
+    updated: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
+def instelling_lezen(sleutel: str) -> dict:
+    with SessionLocal() as s:
+        r = s.query(Instelling).filter_by(sleutel=sleutel).one_or_none()
+        try:
+            return json.loads(r.waarde) if r else {}
+        except ValueError:
+            return {}
+
+
+def instelling_opslaan(sleutel: str, waarde: dict) -> None:
+    with SessionLocal() as s:
+        r = s.query(Instelling).filter_by(sleutel=sleutel).one_or_none()
+        if r is None:
+            r = Instelling(sleutel=sleutel)
+            s.add(r)
+        r.waarde = json.dumps(waarde, ensure_ascii=False)
+        r.updated = dt.datetime.utcnow()
+        s.commit()
+
+
 class AgentRonde(Base):
     """Eén ronde van het agent-team: wanneer, waarom, wat kostte het, en
     welke objecten kregen daardoor een andere score."""

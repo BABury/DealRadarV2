@@ -167,7 +167,8 @@
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <b style="white-space:nowrap;" id="top5-title">🏆 Top 5 — grote steden</b>
       <select id="p-region" onchange="loadTop5()" title="Welke regio">
-        <option value="grote_steden">🏙 grote steden</option>
+        <option value="focus" selected>🎯 focussteden</option>
+        <option value="grote_steden">🏙 grote steden (32)</option>
         <option value="randstad">🌆 Randstad</option>
         <option value="regio_eindhoven">📍 regio Eindhoven</option>
         <option value="alle">🇳🇱 alle steden</option>
@@ -239,6 +240,7 @@
       <button onclick="toonLogboek({})" title="Elke stap van elke agent: wat ze zagen, antwoordden en veranderden">📜 Logboek</button>
       <button onclick="toonRondes()" title="Per ronde: welke objecten kregen een andere score">🔁 Rondes</button>
       <button onclick="toonInstructies()" title="De letterlijke opdracht van elke agent en de grenzen die de code stelt">📋 Opdrachten</button>
+      <button onclick="toonInstellingen()" title="Focussteden, wie wat doet, hoeveel per ronde en het budget">⚙️ Instellingen</button>
     </div>
     <div id="agent-body" style="margin-top:12px;"><span class="muted">Laden…</span></div>
     <div id="agent-log" style="display:none; margin-top:12px; border-top:1px solid var(--border); padding-top:12px;"></div>
@@ -270,6 +272,9 @@
       <option value="oud">Sorteer: langst in de lijst</option>
     </select>
     <input type="text" id="f-q" placeholder="Zoek adres…" oninput="debounceLoad()">
+    <label title="Alleen de grote steden waar splitsen zin heeft (in te stellen onder Agent-team → Instellingen)"
+           style="font-size:13px; white-space:nowrap;">
+      <input type="checkbox" id="f-focus" checked onchange="load()"> alleen focussteden</label>
     <label>Min. score <span id="f-score-v">30</span></label>
     <input type="range" id="f-score" min="0" max="90" step="5" value="30"
            oninput="document.getElementById('f-score-v').textContent=this.value" onchange="load()">
@@ -356,7 +361,8 @@ async function load() {
   const q = document.getElementById("f-q").value;
   const min = document.getElementById("f-score").value;
   const sort = document.getElementById("f-sort").value;
-  const url = `/api/opportunities?city=${encodeURIComponent(city)}&source=${source}&min_score=${min}&sort=${sort}&q=${encodeURIComponent(q)}`;
+  const focus = document.getElementById("f-focus")?.checked ? 1 : 0;
+  const url = `/api/opportunities?city=${encodeURIComponent(city)}&source=${source}&min_score=${min}&sort=${sort}&focus=${focus}&q=${encodeURIComponent(q)}`;
   const rows = await (await fetch(url)).json();
   rowsById = {};
   rows.forEach(r => rowsById[r.id] = r);
@@ -590,7 +596,7 @@ function agentKaart(a) {
       <div><span class="muted">gelezen</span> <b>${a.gelezen_totaal}</b>
            <span class="muted">van ${a.objecten_totaal} objecten</span></div>
       <div><span class="muted">wachtrij</span> <b style="color:${a.wachtrij ? "var(--warn)" : "var(--accent)"}">${a.wachtrij}</b>
-           <span class="muted">· ${a.per_ronde} per ronde, vanaf ${a.vanaf_m2} m²</span></div>
+           <span class="muted">· ${a.per_ronde} per ronde, ${a.vanaf_m2}–${a.tot_m2 || "∞"} m², focussteden</span></div>
       <div style="margin-top:4px">${verdelingHtml(a.verdeling, { ja: "var(--accent)", nee: "var(--hot)", onzeker: "var(--warn)" })}</div>`;
   } else if (a.naam === "regelchecker") {
     const beleid = Object.entries(a.beleid || {});
@@ -640,7 +646,7 @@ async function loadAgentPanel() {
     const uren = String(s.volgende_rondes || "").split(",").filter(Boolean)
       .map(h => h.trim() + ":30").join(" en ");
     document.getElementById("agent-pill").innerHTML = s.aan
-      ? `<span style="color:var(--accent)">aan</span> · rondes om ${uren}${s.ronde_bezig ? ' · <span style="color:var(--accent)">ronde loopt…</span>' : ""}`
+      ? `<span style="color:var(--accent)">aan</span> · ${s.automatisch ? `ook automatisch om ${uren}` : "werkt alleen op jouw opdracht"}${s.ronde_bezig ? ' · <span style="color:var(--accent)">bezig…</span>' : ""}`
       : '<span style="color:var(--warn)">uit — zet ANTHROPIC_API_KEY in Railway</span>';
     const knop = document.getElementById("btn-agents2");
     if (knop) knop.disabled = !s.aan || s.ronde_bezig;
@@ -944,6 +950,121 @@ function oorzaakHtml(o) {
     .map(x => avatar(map[x], 20)).join("") || '<span class="muted">–</span>';
 }
 
+// ── Instellingen: focus, wie wat doet, hoeveel, budget ─────────
+async function toonInstellingen() {
+  agWeergave = "instellingen";
+  const d = await (await fetch("/api/agents/instellingen")).json();
+  const i = d.instellingen, g = d.grenzen;
+  const num = (k, label, uitleg, stap = 1) => `
+    <label style="display:grid; grid-template-columns:190px 110px 1fr; gap:10px; align-items:center; font-size:12px; margin:4px 0;">
+      <span>${label}</span>
+      <input type="number" data-k="${k}" value="${i[k]}" step="${stap}" min="${(g[k] || [])[0] ?? 0}" max="${(g[k] || [])[1] ?? ""}" oninput="agSchatting()" style="width:100px">
+      <span class="muted">${uitleg}</span></label>`;
+  const aan = (k, label) => `<label style="font-size:12px; display:inline-flex; gap:6px; align-items:center;">
+      <input type="checkbox" data-k="${k}" ${i[k] ? "checked" : ""} onchange="agSchatting()"> ${label}</label>`;
+  const blok = (agent, inhoud) => {
+    const t = AGENTS[agent];
+    return `<div style="border:1px solid var(--border); border-left:3px solid ${t.kleur}; border-radius:10px; padding:12px 14px;">
+      <div style="display:flex; gap:10px; align-items:center; margin-bottom:6px;">${avatar(agent, 30)}
+        <b style="color:${t.kleur}">${t.naam}</b> <span class="muted">· ${t.rol}</span></div>${inhoud}</div>`;
+  };
+  agBlok(`
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+      <b>⚙️ Instellingen</b><span class="muted" style="font-size:12px">getallen worden begrensd, zodat een typefout nooit veel kan kosten</span>
+      <span style="flex:1"></span><button onclick="agSluit()" style="font-size:12px">✕</button>
+    </div>
+    <div style="display:grid; gap:12px;">
+      <div style="border:1px solid var(--border); border-radius:10px; padding:12px 14px;">
+        <b style="font-size:13px">🎯 Focussteden</b>
+        <span class="muted" style="font-size:12px">— geldt voor de hele app: tabel, top-lijsten, Telegram én het team. Buiten deze steden doet het team niets.</span>
+        <div id="agi-steden" style="display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:10px;">
+          ${d.steden_keuze.map(c => `<label style="font-size:12px; display:inline-flex; gap:5px; align-items:center; min-width:130px;">
+            <input type="checkbox" value="${c}" ${i.steden.includes(c) ? "checked" : ""} onchange="agSchatting()"> ${c}</label>`).join("")}
+        </div>
+      </div>
+      <div style="border:1px solid var(--border); border-radius:10px; padding:12px 14px;">
+        <b style="font-size:13px">🕹 Wanneer werkt het team?</b>
+        <div class="muted" style="font-size:12px; margin:4px 0 8px;">Standaard alleen op jouw opdracht: de knop bij een object, "Nu een ronde draaien", of Telegram.</div>
+        ${aan("automatische_rondes", "ook zelf een ronde draaien om 7:30 en 18:30")}
+      </div>
+      ${blok("lezer", `${aan("lotte_aan", "Lotte leest mee")}
+        ${num("lotte_per_ronde", "Objecten per ronde", "hoeveel ze per ronde leest; de rest wacht op de volgende")}
+        ${num("lotte_min_m2", "Vanaf m²", "kleiner = niet interessant om te splitsen")}
+        ${num("lotte_max_m2", "Tot m²", "groter = project, niet jouw strategie (0 = geen grens)")}
+        ${aan("lotte_alleen_splitspotentie", "alleen objecten waar de rekensom al splitspotentie ziet")}`)}
+      ${blok("regelchecker", `${aan("rik_aan", "Rik zoekt beleid op")}
+        ${num("rik_steden_per_ronde", "Steden per ronde", "alleen nieuwe of verlopen steden; uitgezochte steden kosten niets")}
+        ${num("rik_zoekopdrachten", "Zoekopdrachten per stad", "meer = grondiger én duurder")}
+        ${num("rik_geldig_dagen", "Uitkomst geldig (dagen)", "daarna zoekt hij de stad opnieuw op")}`)}
+      ${blok("criticus", `${aan("kees_aan", "Kees bekritiseert de topdeals")}
+        ${num("kees_top_n", "Topdeals per soort", "koop én veiling; dezelfde deal pas na 14 dagen opnieuw")}`)}
+      <div style="border:1px solid var(--border); border-radius:10px; padding:12px 14px;">
+        <b style="font-size:13px">💶 Budget</b>
+        ${num("dagbudget_usd", "Dagbudget ($)", "harde grens; daarna stopt het team tot morgen", 0.5)}
+        <label style="display:grid; grid-template-columns:190px 110px 1fr; gap:10px; align-items:center; font-size:12px; margin:4px 0;">
+          <span>Denkniveau Rik en Kees</span>
+          <select data-k="denkniveau" onchange="agSchatting()" style="width:100px">
+            ${["low", "medium", "high"].map(v => `<option value="${v}" ${i.denkniveau === v ? "selected" : ""}>${{ low: "laag", medium: "middel", high: "hoog" }[v]}</option>`).join("")}
+          </select>
+          <span class="muted">hoger = grondiger nadenken, duurder</span></label>
+        <div id="agi-schatting" style="font-size:12px; margin-top:8px;"></div>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button onclick="agInstellingenOpslaan()">💾 Opslaan</button>
+        <button onclick="agInstellingenStandaard()" style="opacity:.8">Standaard terugzetten</button>
+        <span id="agi-status" class="muted" style="font-size:12px"></span>
+      </div>
+    </div>`);
+  window._agStandaard = d.standaard;
+  agSchatting();
+}
+
+function agVerzamel() {
+  const uit = {};
+  document.querySelectorAll("#agent-log [data-k]").forEach(el => {
+    const k = el.dataset.k;
+    uit[k] = el.type === "checkbox" ? el.checked : el.tagName === "SELECT" ? el.value : Number(el.value);
+  });
+  uit.steden = [...document.querySelectorAll("#agi-steden input:checked")].map(x => x.value);
+  return uit;
+}
+
+function agSchatting() {
+  // Zelfde formule als de server (instellingen.schatting), om live mee te kijken
+  const d = agVerzamel(), k = { lotte: 0.0045, rik: 0.025, kees: 0.014 };
+  const lotte = d.lotte_aan ? d.lotte_per_ronde * k.lotte : 0;
+  const rik = d.rik_aan ? d.rik_steden_per_ronde * d.rik_zoekopdrachten * k.rik : 0;
+  const kees = d.kees_aan ? 2 * d.kees_top_n * k.kees : 0;
+  const tot = lotte + rik + kees;
+  const el = document.getElementById("agi-schatting");
+  if (el) el.innerHTML = `Maximaal per ronde ≈ <b>$${tot.toFixed(2)}</b>
+    <span class="muted">(Lotte $${lotte.toFixed(2)} · Rik $${rik.toFixed(2)} · Kees $${kees.toFixed(2)}) —
+    2 rondes per dag ≈ $${(2 * tot).toFixed(2)} ${2 * tot > d.dagbudget_usd ? `<span style="color:var(--warn)">· boven je dagbudget, dus het budget remt af</span>` : ""}.
+    Rik kost alleen iets bij een nieuwe of verlopen stad. ${d.steden.length} focussteden gekozen.</span>`;
+}
+
+async function agInstellingenOpslaan() {
+  const st = document.getElementById("agi-status");
+  const d = agVerzamel();
+  if (!d.steden.length && !confirm("Geen enkele focusstad gekozen: de tabel en het team laten dan niets meer zien. Toch opslaan?")) return;
+  st.textContent = "opslaan…";
+  try {
+    const r = await (await fetch("/api/agents/instellingen", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(d) })).json();
+    st.innerHTML = `<span style="color:var(--accent)">opgeslagen</span> — scores herberekend`;
+    await toonInstellingen();
+    document.getElementById("agi-status").innerHTML = `<span style="color:var(--accent)">✓ opgeslagen — scores herberekend</span>`;
+    loadAgentPanel(); load(); loadTop5();
+  } catch (e) { st.innerHTML = `<span style="color:var(--hot)">opslaan mislukt</span>`; }
+}
+
+async function agInstellingenStandaard() {
+  if (!confirm("Alle instellingen van het team terugzetten naar de standaard?")) return;
+  await fetch("/api/agents/instellingen", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(window._agStandaard || {}) });
+  toonInstellingen(); loadAgentPanel(); load(); loadTop5();
+}
+
 // Opdrachten: geen geheime prompts
 async function toonInstructies() {
   agWeergave = "instructies";
@@ -1007,12 +1128,55 @@ function renderAgentLog(s) {
     </div>`;
 }
 
+// ── Opdracht: laat het team één object uitzoeken ───────────────
+async function laatUitzoeken(id) {
+  const knop = document.getElementById("ond-knop-" + id);
+  const st = document.getElementById("ond-status-" + id);
+  if (knop) knop.disabled = true;
+  const res = await fetch("/api/agents/onderzoek?listing_id=" + id, { method: "POST" });
+  const d = await res.json();
+  if (d.error) { if (st) st.innerHTML = `<span style="color:var(--hot)">${esc(d.error)}</span>`; if (knop) knop.disabled = false; return; }
+  loadAgentPanel();
+  const t0 = Date.now();
+  const kijk = async () => {
+    const s = await (await fetch("/api/agents/onderzoek/" + id)).json();
+    const el = document.getElementById("ond-status-" + id);
+    if (s.status === "bezig") {
+      const ov = window._agentStatus || {};
+      const wie = (ov.agents || []).find(a => a.bezig);
+      const naam = wie ? `${avatar(wie.naam, 18, true)} ${(AGENTS[wie.naam] || {}).naam} is bezig…` : "het team is bezig…";
+      if (el) el.innerHTML = `<span style="display:inline-flex; gap:6px; align-items:center; color:var(--accent2)">${naam}
+        <span class="muted">${Math.round((Date.now() - t0) / 1000)}s</span></span>`;
+      loadAgentPanel();
+      setTimeout(kijk, 4000);
+      return;
+    }
+    const r = s.rapport || {};
+    if (el) el.innerHTML = r.status === "ok" || r.status === "deels"
+      ? `<span style="color:var(--accent)">✓ klaar</span> — score ${r.score_voor} → <b>${r.score_na}</b> · $${(r.kosten_usd || 0).toFixed(3)}
+         ${r.status === "deels" ? ' · <span style="color:var(--warn)">niet alles lukte, zie spoor</span>' : ""}`
+      : `<span style="color:var(--hot)">${esc(r.reden || r.message || r.status)}</span>`;
+    // Nieuwe oordelen laden en het object weer openklappen
+    await loadCityStats(); await load();
+    const tr = document.querySelector(`tr[data-id="${id}"]`);
+    if (tr) toggleDetail({ target: tr }, id);
+  };
+  setTimeout(kijk, 3000);
+}
+
+// Links vanuit Telegram: ?spoor=<object> of ?ronde=<nummer>
+function openDeepLink() {
+  const p = new URLSearchParams(location.search);
+  const card = document.getElementById("agent-card");
+  if (p.get("spoor")) { toonLogboek({ listing_id: Number(p.get("spoor")) }); card && card.scrollIntoView(); }
+  else if (p.get("ronde")) { toonRonde(Number(p.get("ronde"))); card && card.scrollIntoView(); }
+}
+
 // Volledig verslag van het agent-team onder een object.
 function aiBlok(r) {
   const b = r.ai_bevinding || {};
   const c = b.criticus || null;
   const g = gemeenteRegels[(r.city || "").toLowerCase()];
-  if (!r.ai_checked && !g) return "";
 
   const rij = (k, v) => v ? `<tr><td class="muted" style="padding:2px 10px 2px 0; white-space:nowrap">${k}</td><td>${v}</td></tr>` : "";
   const ernstKleur = { hoog: "var(--hot)", midden: "var(--warn)", laag: "var(--muted)" };
@@ -1058,7 +1222,11 @@ function aiBlok(r) {
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;"><b>Agent-team</b>
       <span class="muted" style="font-size:11px">leest tekst en beleid; de bedragen komen uit het rekenmodel</span>
       <span style="flex:1"></span>
-      <button onclick="toonLogboek({listing_id:${r.id}})" style="font-size:11px; padding:3px 8px;">📜 volledig spoor van dit object</button></div>
+      <button id="ond-knop-${r.id}" onclick="laatUitzoeken(${r.id})" style="font-size:11px; padding:3px 8px;"
+        title="Rik checkt het beleid van de stad, Lotte leest de tekst, Kees zoekt de zwakke plekken">🔍 Laat het team dit uitzoeken</button>
+      <button onclick="toonLogboek({listing_id:${r.id}})" style="font-size:11px; padding:3px 8px;">📜 volledig spoor</button></div>
+    <div id="ond-status-${r.id}" style="font-size:12px;"></div>
+    ${!r.ai_checked && !g ? '<div class="muted" style="font-size:12px">Nog niet uitgezocht. Het team werkt alleen op jouw opdracht.</div>' : ""}
     ${lezer}${gem}${krit}
     ${!c ? '<div class="muted" style="font-size:11px">Kees (Criticus) beoordeelt alleen de topdeals.</div>' : ""}
   </div>`;
@@ -1557,6 +1725,7 @@ setInterval(checkRunning, 10000);
 loadAgentStatus();
 setInterval(loadAgentStatus, 120000);
 loadAgentPanel();
+setTimeout(openDeepLink, 1200);
 </script>
 </body>
 </html>

@@ -36,13 +36,17 @@ def _post(url: str, data: dict, timeout: int = 15) -> bool:
         return False
 
 
-def send_telegram(text: str) -> bool:
+def send_telegram(text: str, knoppen: list | None = None) -> bool:
+    """knoppen: Telegram inline_keyboard, bv. [[{"text": "...", "callback_data": "..."}]]."""
     token, chat = _env("TELEGRAM_TOKEN"), _env("TELEGRAM_CHAT_ID")
     if not token or not chat:
         return False
-    return _post(f"https://api.telegram.org/bot{token}/sendMessage",
-                 {"chat_id": chat, "text": text,
-                  "parse_mode": "HTML", "disable_web_page_preview": "false"})
+    data = {"chat_id": chat, "text": text,
+            "parse_mode": "HTML", "disable_web_page_preview": "false"}
+    if knoppen:
+        import json as _json
+        data["reply_markup"] = _json.dumps({"inline_keyboard": knoppen})
+    return _post(f"https://api.telegram.org/bot{token}/sendMessage", data)
 
 
 def send_pushover(title: str, text: str, url: str = "") -> bool:
@@ -178,7 +182,7 @@ def check_and_alert(region: str = "", profile: str = "",
 
     from .scenarios import get_profile, top_listings
     profile = profile or _env("ALERT_PROFILE", "bob")
-    region = region or _env("ALERT_REGION", "grote_steden")
+    region = region or _env("ALERT_REGION", "focus")
     min_profit = float(_env("ALERT_MIN_PROFIT", "50000"))
     min_roi = float(_env("ALERT_MIN_ROI", "15"))
 
@@ -205,7 +209,16 @@ def check_and_alert(region: str = "", profile: str = "",
     for o in nieuw:
         titel, body, url = _deal_text(o)
         ok = False
-        ok |= send_telegram(f"<b>{titel}</b>\n{body}")
+        # Het team werkt op opdracht: één tik op de knop en het zoekt deze deal uit
+        knoppen = None
+        try:
+            from .agents import agents_enabled
+            if agents_enabled():
+                knoppen = [[{"text": "🔍 Laat het team uitzoeken",
+                             "callback_data": f"onderzoek:{o['id']}"}]]
+        except Exception:
+            pass
+        ok |= send_telegram(f"<b>{titel}</b>\n{body}", knoppen=knoppen)
         ok |= send_pushover(titel, body, url)
         ok |= send_email(f"DealRadar: {o.get('address','')} "
                          f"({_fmt_eur(o.get('best_laag'))} netto)",
@@ -239,9 +252,9 @@ def send_daily_status(report: dict) -> bool:
     try:
         from .scenarios import get_profile, top_listings
         profiel = _env("ALERT_PROFILE", "bob")
-        dp = top_listings(get_profile(profiel), n=1, rank="risk", region="alle", soort="project")
+        dp = top_listings(get_profile(profiel), n=1, rank="risk", region="focus", soort="project")
         for soort, kop in (("koop", "🏠 Funda te koop"), ("veiling", "🔨 Veilingen (max. bod)")):
-            d = top_listings(get_profile(profiel), n=3, rank="risk", region="alle", soort=soort)
+            d = top_listings(get_profile(profiel), n=3, rank="risk", region="focus", soort=soort)
             regels.append(f"\n{kop}: {d['beoordeeld']} splitskansen met winst")
             for o in d["top"]:
                 p = (f"max. bod {_fmt_eur(o.get('max_bod'))}" if o.get("veiling")

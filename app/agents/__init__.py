@@ -159,7 +159,9 @@ def _client_get():
 
 
 def dagbudget() -> float:
-    return float(os.getenv("AGENT_MAX_USD_PER_DAY", "2.0"))
+    """In te stellen in het dashboard (standaard $2, of AGENT_MAX_USD_PER_DAY)."""
+    from .instellingen import lees
+    return float(lees()["dagbudget_usd"])
 
 
 def _kosten(model: str, tok_in: int, tok_out: int) -> float:
@@ -210,7 +212,8 @@ def _opties(model: str) -> dict:
     """
     if "haiku" in model:
         return {}
-    return {"output_config": {"effort": os.getenv("AGENT_EFFORT", "medium")}}
+    from .instellingen import lees
+    return {"output_config": {"effort": os.getenv("AGENT_EFFORT") or lees()["denkniveau"]}}
 
 
 def _web_tool(model: str, max_uses: int) -> dict:
@@ -300,7 +303,7 @@ def onderzoek(*, agent: str, model: str, system: str, prompt: str,
     tok_in = tok_out = 0
     msgs = [{"role": "user", "content": prompt}]
     try:
-        for _ in range(4):                       # max 3 hervattingen
+        for _ in range(2):                       # hooguit één hervatting: grenst tijd én kosten
             r = _client_get().messages.create(
                 model=model, max_tokens=max_tokens, system=system, tools=web,
                 messages=msgs, **_opties(model))

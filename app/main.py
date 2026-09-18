@@ -8,7 +8,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import desc, func
 
@@ -75,6 +75,11 @@ def _run_agents(max_lezen: int | None = None, top_n: int | None = None,
     topdeals. Eigen lock (mag prima naast een scrape lopen — het is netwerk-
     wachten, geen browserwerk) maar nooit twee rondes tegelijk."""
     import datetime as dt
+    if trigger == "schema":
+        # Het team werkt alleen op opdracht, tenzij je automatische rondes aanzet
+        from .agents.instellingen import lees as _lees
+        if not _lees()["automatische_rondes"]:
+            return {"status": "overgeslagen", "reden": "automatische rondes staan uit"}
     if not _agent_lock.acquire(blocking=False):
         return {"status": "al bezig"}
     _agent_state["running"] = True
@@ -90,6 +95,43 @@ def _run_agents(max_lezen: int | None = None, top_n: int | None = None,
     finally:
         _agent_state["running"] = False
         _agent_lock.release()
+
+
+# Opdrachten per object: status per listing_id, zodat dashboard en Telegram
+# kunnen zien wanneer het team klaar is.
+ONDERZOEK: dict[int, dict] = {}
+
+
+def _run_onderzoek(listing_id: int, trigger: str = "knop", na=None) -> dict:
+    """Laat het team één object uitzoeken. `na(rapport)` wordt aangeroepen als
+    het klaar is (bijvoorbeeld: antwoord terugsturen in Telegram)."""
+    import datetime as dt
+    if not _agent_lock.acquire(blocking=False):
+        rapport = {"status": "al bezig", "listing_id": listing_id}
+        if na:
+            na(rapport)
+        return rapport
+    _agent_state["running"] = True
+    _agent_state["started"] = dt.datetime.utcnow().isoformat()
+    ONDERZOEK[listing_id] = {"status": "bezig", "gestart": _agent_state["started"]}
+    try:
+        from .agents.team import onderzoek_object
+        rapport = onderzoek_object(listing_id, trigger=trigger)
+    except Exception as e:
+        print(f"[agents] onderzoek {listing_id} mislukt: {e}", flush=True)
+        rapport = {"status": "error", "message": str(e)[:200], "listing_id": listing_id}
+    finally:
+        _agent_state["running"] = False
+        _agent_lock.release()
+    ONDERZOEK[listing_id] = {"status": "klaar", "rapport": rapport,
+                             "klaar": dt.datetime.utcnow().isoformat()}
+    _agent_state["last_report"] = rapport
+    if na:
+        try:
+            na(rapport)
+        except Exception as e:
+            print(f"[agents] terugmelden mislukt: {e}", flush=True)
+    return rapport
 
 
 def _run_sold_scrape() -> dict:
@@ -153,6 +195,10 @@ async def lifespan(app: FastAPI):
     _scheduler.start()
     from .scenarios import seed_profiles
     seed_profiles()
+    # Telegram-opdrachten: vertel Telegram waar de berichten heen moeten
+    if os.getenv("TELEGRAM_TOKEN") and os.getenv("TELEGRAM_WEBHOOK", "1") == "1":
+        from .telegram_bot import koppel_webhook
+        threading.Thread(target=koppel_webhook, daemon=True).start()
     if os.getenv("SCRAPE_ON_START", "1") == "1":       # na elke deploy direct resultaten
         threading.Thread(target=_run_scrape, daemon=True).start()
     # Eerste keer: nog geen verkocht-data? Dan direct benchmarks opbouwen.
@@ -190,12 +236,17 @@ def opportunities(
     min_score: int = Query(default=0),
     q: str = Query(default=""),
     sort: str = Query(default="score"),
+    focus: int = Query(default=1),
     limit: int = Query(default=200, le=1000),
 ):
     with SessionLocal() as s:
         qry = s.query(Listing)
         if city:
             qry = qry.filter(func.lower(Listing.city) == city.lower())
+        elif focus:
+            # Standaard alleen de focussteden; focus=0 toont heel Nederland
+            from .agents.instellingen import focus_varianten
+            qry = qry.filter(func.lower(Listing.city).in_(sorted(focus_varianten())))
         if source:
             qry = qry.filter(Listing.source == source)
         if min_score:
@@ -294,7 +345,7 @@ def scenarios_ep(listing_id: int = Query(...), profile: str = Query(default="sta
 @app.get("/api/top5")
 def top5(profile: str = Query(default="standaard"),
          cities: str = Query(default=""),
-         region: str = Query(default="grote_steden"),
+         region: str = Query(default="focus"),
          n: int = Query(default=5, le=25),
          min_score: int = Query(default=0),
          rank: str = Query(default="risk"),
@@ -316,7 +367,7 @@ def top5(profile: str = Query(default="standaard"),
             params[k] = v
     city_list = [c.strip() for c in cities.split(",") if c.strip()] or None
     rank = rank if rank in ("risk", "roi", "winst", "nieuw", "oud") else "risk"
-    region = region if region in ("grote_steden", "randstad", "regio_eindhoven", "alle") else "grote_steden"
+    region = region if region in ("focus", "grote_steden", "randstad", "regio_eindhoven", "alle") else "focus"
     soort = soort if soort in ("alles", "koop", "veiling", "project") else "koop"
     return top_listings(params, cities=city_list, n=n, min_score=min_score,
                         rank=rank, region=region, soort=soort)
@@ -398,7 +449,7 @@ def diag_funda(city: str = Query(default="eindhoven")):
 
 
 @app.get("/api/export-pnl")
-def export_pnl(region: str = Query(default="grote_steden"),
+def export_pnl(region: str = Query(default="focus"),
                profile: str = Query(default="standaard"),
                rank: str = Query(default="risk"),
                n: int = Query(default=10, le=25)):
@@ -428,7 +479,7 @@ def alerts_status():
         "drempels": {
             "min_winst": float(os.getenv("ALERT_MIN_PROFIT", "50000")),
             "min_roi_pct": float(os.getenv("ALERT_MIN_ROI", "15")),
-            "regio": os.getenv("ALERT_REGION", "grote_steden"),
+            "regio": os.getenv("ALERT_REGION", "focus"),
         },
     }
 
@@ -480,7 +531,10 @@ def agents_overzicht():
     import datetime as dt
 
     from .agents import PROGRESS, agents_enabled, dagbudget
-    from .agents.team import MAX_LEZEN, MAX_STEDEN, MIN_M2, TOP_N, wachtrij
+    from .agents.instellingen import lees as lees_instellingen
+    from .agents.instellingen import schatting
+    from .agents.team import wachtrij
+    ins = lees_instellingen()
     from .db import agent_kosten_overzicht, agent_kosten_vandaag, agent_werk_overzicht
 
     werk = agent_werk_overzicht()
@@ -518,17 +572,24 @@ def agents_overzicht():
             rij("lezer", "leest de advertentietekst van elk nieuw object",
                 {"gelezen_totaal": werk["gelezen"],
                  "objecten_totaal": werk["objecten_totaal"],
-                 "wachtrij": wachtrij(), "per_ronde": MAX_LEZEN,
-                 "vanaf_m2": MIN_M2, "verdeling": werk["splits_verdeling"],
+                 "wachtrij": wachtrij(), "per_ronde": ins["lotte_per_ronde"],
+                 "vanaf_m2": ins["lotte_min_m2"], "tot_m2": ins["lotte_max_m2"],
+                 "aan_uit": ins["lotte_aan"], "verdeling": werk["splits_verdeling"],
                  "laatst_gelezen": werk["laatst_gelezen"]}),
             rij("regelchecker", "zoekt per gemeente het splitsbeleid op",
                 {"gemeenten": werk["gemeenten"],
                  "gemeenten_verouderd": werk["gemeenten_verouderd"],
-                 "per_ronde": MAX_STEDEN, "beleid": werk["gemeenten_beleid"]}),
+                 "per_ronde": ins["rik_steden_per_ronde"], "aan_uit": ins["rik_aan"],
+                 "beleid": {c: t for c, t in werk["gemeenten_beleid"].items()
+                            if c in set(ins["steden"])}}),
             rij("criticus", "valt de topdeals aan en levert de vragen vooraf",
-                {"per_ronde": TOP_N, "verdeling": werk["advies_verdeling"]}),
+                {"per_ronde": ins["kees_top_n"], "aan_uit": ins["kees_aan"],
+                 "verdeling": werk["advies_verdeling"]}),
         ],
         "laatste_ronde": werk["laatste_ronde"],
+        "focussteden": ins["steden"],
+        "automatisch": ins["automatische_rondes"],
+        "schatting_per_ronde": schatting(ins),
         "laatste_rapport": _agent_state["last_report"],
         "kosten_per_dag": kosten,
     }
@@ -587,7 +648,8 @@ def agents_instructies():
     return {
         "lezer": {"model": MODEL_LEZER, "instructie": lezer.SYSTEM,
                   "antwoordformaat": lezer.SCHEMA,
-                  "grenzen": ["punten altijd tussen −20 en +20",
+                  "grenzen": ["alleen objecten in de focussteden, binnen de m²-grenzen, met tekst "
+                              "en (standaard) met splitspotentie volgens de rekensom","punten altijd tussen −20 en +20",
                               "huurbeding ingeroepen = altijd −20",
                               "verhuurd = hooguit −8",
                               "al gesplitst = hooguit −5",
@@ -596,21 +658,110 @@ def agents_instructies():
         "regelchecker": {"model": MODEL_DENKER, "instructie": regels.SYSTEM_ZOEK,
                          "omzetten": regels.SYSTEM_JSON,
                          "antwoordformaat": regels.SCHEMA,
-                         "grenzen": [f"beleid wordt {regels.GELDIG_DAGEN} dagen bewaard",
+                         "grenzen": [f"beleid wordt {regels.geldig_dagen()} dagen bewaard",
+                                     "alleen focussteden, en alleen als het beleid nog niet (geldig) bekend is",
                                      "zekerheidsfactor splitsen: ja 1,00 · met vergunning 0,90 · "
-                                     "beperkt 0,65 · nee 0,25 · onduidelijk 0,85",
-                                     "nog niet uitgezocht = 1,00 (geen effect)",
+                                     "beperkt 0,65 · nee 0,25",
+                                     "niets gevonden = niet opgeslagen en geen effect (1,00); volgende ronde opnieuw",
                                      "minimale woninggrootte van de gemeente gaat vóór de aanname",
                                      "een bestaande splitsingsvergunning wordt nooit afgewaardeerd"]},
         "criticus": {"model": MODEL_DENKER, "instructie": criticus.SYSTEM,
                      "antwoordformaat": criticus.SCHEMA,
-                     "grenzen": ["aftrek hooguit −30",
+                     "grenzen": ["alleen de topdeals (koop en veiling) in de focussteden; "
+                                 "dezelfde deal pas na 14 dagen opnieuw","aftrek hooguit −30",
                                  "alleen lage ernst: hooguit −5",
                                  "geen hoge ernst: hooguit −15",
                                  "Lezer + Criticus samen tussen −35 en +20",
                                  "'laten lopen' blokkeert de Telegram-melding, niet het dashboard"]},
         "budget": {"dag_usd": dagbudget()},
     }
+
+
+@app.get("/api/agents/instellingen")
+def agents_instellingen_lezen():
+    """Huidige instellingen van het team, de standaarden en de kostenschatting."""
+    from .agents.instellingen import GRENZEN, STANDAARD, lees, schatting
+    from .scenarios import GROTE_STEDEN
+    d = lees()
+    keuze = sorted({c for c in GROTE_STEDEN if not c.startswith("'")} | set(d["steden"]))
+    return {"instellingen": d, "standaard": STANDAARD, "grenzen": GRENZEN,
+            "steden_keuze": keuze, "schatting_per_ronde": schatting(d)}
+
+
+@app.post("/api/agents/instellingen")
+def agents_instellingen_opslaan(body: dict):
+    """Instellingen bijwerken. Getallen worden begrensd (zie 'grenzen')."""
+    from .agents.instellingen import opslaan, schatting
+    d = opslaan(body or {})
+    try:
+        compute_scores()          # focus/grenzen kunnen de ranglijst veranderen
+    except Exception as e:
+        print(f"[agents] herscoren na instellingen mislukt: {e}", flush=True)
+    return {"instellingen": d, "schatting_per_ronde": schatting(d)}
+
+
+@app.post("/api/agents/onderzoek")
+def agents_onderzoek(listing_id: int = Query(...)):
+    """Laat het team één object uitzoeken (Rik → Lotte → Kees)."""
+    from .agents import agents_enabled
+    if not agents_enabled():
+        return JSONResponse({"error": "Geen ANTHROPIC_API_KEY ingesteld."}, status_code=400)
+    if _agent_state["running"]:
+        return JSONResponse({"error": "Het team is al bezig — probeer het zo nog eens."},
+                            status_code=409)
+    with SessionLocal() as s:
+        if not s.get(Listing, listing_id):
+            return JSONResponse({"error": f"object {listing_id} niet gevonden"}, status_code=404)
+    ONDERZOEK[listing_id] = {"status": "bezig"}
+    threading.Thread(target=_run_onderzoek, args=(listing_id, "knop"), daemon=True).start()
+    return {"status": "gestart", "listing_id": listing_id}
+
+
+@app.get("/api/agents/onderzoek/{listing_id}")
+def agents_onderzoek_status(listing_id: int):
+    return ONDERZOEK.get(listing_id) or {"status": "geen"}
+
+
+def _ronde_via_telegram() -> None:
+    """/ronde vanuit Telegram: draai een ronde en meld het resultaat terug."""
+    from .telegram_bot import publieke_url, stuur
+    r = _run_agents(trigger="telegram")
+    if r.get("status") == "al bezig":
+        stuur("⏳ Het team is al bezig. Probeer het zo nog eens.")
+        return
+    if r.get("status") in ("uit", "budget_op", "error"):
+        stuur(f"⚠️ Ronde niet gelukt: {r.get('reden') or r.get('message') or r.get('status')}")
+        return
+    lz, rk, ks = r.get("lezer") or {}, r.get("regelchecker") or {}, r.get("criticus") or {}
+    url = publieke_url()
+    stuur(f"✅ <b>Ronde {r.get('ronde_id')} klaar</b>\n"
+          f"📖 Lotte las {lz.get('gelezen', 0)} objecten\n"
+          f"⚖️ Rik zocht {rk.get('gecheckt', 0)} gemeenten uit\n"
+          f"🔎 Kees bekritiseerde {ks.get('beoordeeld', 0)} deals\n"
+          f"<i>kosten ${(r.get('kosten') or {}).get('deze_ronde_usd', 0):.3f}</i>"
+          + (f" · <a href=\"{url}/?ronde={r.get('ronde_id')}\">wat veranderde er</a>" if url else ""))
+
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Berichten van Telegram. Zonder het juiste geheim: genegeerd."""
+    from .telegram_bot import geheim, verwerk
+    if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != geheim():
+        return JSONResponse({"ok": False}, status_code=403)
+    try:
+        update = await request.json()
+    except Exception:
+        return {"ok": True}
+    threading.Thread(target=verwerk, args=(update, _run_onderzoek, _ronde_via_telegram),
+                     daemon=True).start()
+    return {"ok": True}        # meteen antwoorden; Telegram probeert anders opnieuw
+
+
+@app.post("/api/telegram/koppel")
+def telegram_koppel():
+    """Webhook opnieuw aanmelden bij Telegram (gebeurt ook bij elke start)."""
+    from .telegram_bot import koppel_webhook
+    return koppel_webhook()
 
 
 @app.post("/api/agents/run")

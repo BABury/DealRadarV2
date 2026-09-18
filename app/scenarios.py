@@ -360,7 +360,7 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
     'roi'   = conservatieve ROI % op de inleg (kapitaal-efficiënt, min. moeite)
     'winst' = ruwe mid-upside (oud gedrag)
     'nieuw' = nieuwste vondsten eerst · 'oud' = oudste eerst.
-    region: 'grote_steden' (default) | 'randstad' | 'regio_eindhoven' | 'alle',
+    region: 'focus' (de focussteden) | 'grote_steden' | 'randstad' | 'regio_eindhoven' | 'alle',
     of geef `cities` expliciet mee (overrulet de regio)."""
     from .db import Listing, SessionLocal
     if cities:
@@ -368,6 +368,10 @@ def top_listings(profile_params: dict, cities: list[str] | None = None,
         all_cities = False
     elif region == "alle":
         city_set, all_cities = set(), True
+    elif region == "focus":
+        # De focussteden uit het dashboard: waar splitsen in meerdere woningen zin heeft
+        from .agents.instellingen import focus_varianten
+        city_set, all_cities = focus_varianten(), False
     else:
         city_set = {c.lower() for c in REGIONS.get(region, GROTE_STEDEN)}
         all_cities = False

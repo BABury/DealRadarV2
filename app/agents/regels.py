@@ -16,7 +16,13 @@ import os
 
 from . import MODEL_DENKER, als_json, onderzoek, vraag_json
 
-GELDIG_DAGEN = int(os.getenv("AGENT_REGELS_DAGEN", "30"))
+def geldig_dagen() -> int:
+    """Hoelang een uitkomst van Rik geldig blijft (instelbaar in het dashboard)."""
+    from .instellingen import lees
+    return int(lees()["rik_geldig_dagen"])
+
+
+GELDIG_DAGEN = 60   # alleen nog als tekst in de uitleg; de echte waarde komt uit geldig_dagen()
 
 SYSTEM_ZOEK = """Je bent jurist ruimtelijke ordening. Je zoekt het actuele beleid
 van één Nederlandse gemeente op over het SPLITSEN van een woning in meerdere
@@ -71,11 +77,14 @@ VERWACHT_STRENG = {"amsterdam", "utrecht", "den-haag", "den haag", "haarlem",
 def _verouderd(regel: dict | None) -> bool:
     if not regel or not regel.get("updated"):
         return True
+    # 'onbekend' is geen beleid maar een mislukte zoektocht: opnieuw proberen
+    if (regel.get("toegestaan") or "onbekend") == "onbekend":
+        return True
     try:
         d = dt.datetime.fromisoformat(str(regel["updated"]).replace("Z", ""))
     except ValueError:
         return True
-    return (dt.datetime.utcnow() - d).days >= GELDIG_DAGEN
+    return (dt.datetime.utcnow() - d).days >= geldig_dagen()
 
 
 def check(city: str, forceer: bool = False) -> dict:
@@ -83,7 +92,8 @@ def check(city: str, forceer: bool = False) -> dict:
     from ..db import gemeente_regel
     vergeet_cache()
 
-    stad = (city or "").strip().lower()
+    from .instellingen import stad as _norm
+    stad = _norm(city)
     if not stad:
         return {}
     bestaand = gemeente_regel(stad)
@@ -96,6 +106,11 @@ def check(city: str, forceer: bool = False) -> dict:
         return _check_zoek(stad, net, bestaand, noteer_toegepast)
 
 
+def _zoekopdrachten() -> int:
+    from .instellingen import lees
+    return int(lees()["rik_zoekopdrachten"])
+
+
 def _check_zoek(stad: str, net: str, bestaand: dict | None, noteer_toegepast) -> dict:
     from ..db import gemeente_regel_opslaan
     verslag, bronnen = onderzoek(
@@ -103,7 +118,7 @@ def _check_zoek(stad: str, net: str, bestaand: dict | None, noteer_toegepast) ->
         prompt=(f"Gemeente: {net}\n\nZoek het actuele beleid voor woningsplitsing "
                 f"in {net} op. Mag je daar een woning splitsen in meerdere "
                 f"zelfstandige appartementen, en onder welke voorwaarden?"),
-        max_uses=int(os.getenv("AGENT_WEB_USES", "6")))
+        max_uses=_zoekopdrachten())
 
     data = vraag_json(agent="regelchecker", model=MODEL_DENKER,
                       system=SYSTEM_JSON, schema=SCHEMA, naam="beleid",
@@ -120,6 +135,15 @@ def _check_zoek(stad: str, net: str, bestaand: dict | None, noteer_toegepast) ->
                     ("quota_of_verboden", "parkeernorm", "let_op", "peiljaar")},
         "bronnen": bronnen[:8],
     }
+    # Niets gevonden is geen beleid. Opslaan zou de splitszekerheid van de
+    # hele stad onterecht verlagen (dat gebeurde in de eerste live ronde met
+    # Rotterdam). Dus: niet opslaan, als fout loggen, volgende ronde opnieuw.
+    if (opslaan["toegestaan"] or "onbekend") == "onbekend":
+        noteer_toegepast({"opgeslagen": False,
+                          "reden": "geen beleid gevonden — niet opgeslagen, volgende ronde opnieuw",
+                          "bronnen_gevonden": len(opslaan["bronnen"])})
+        raise RuntimeError(f"regelchecker: geen beleid gevonden voor {net} — niet opgeslagen")
+
     # Wat verandert er door dit beleid? Vorige stand naast de nieuwe, plus
     # de rem op splitszekerheid die de code eruit afleidt.
     nieuw_factor = {"ja": 1.0, "ja_met_vergunning": 0.9, "beperkt": 0.65,
@@ -130,7 +154,7 @@ def _check_zoek(stad: str, net: str, bestaand: dict | None, noteer_toegepast) ->
         "zekerheidsfactor_splitsen": nieuw_factor,
         "min_woning_m2": opslaan["min_woning_m2"],
         "bronnen_bewaard": len(opslaan["bronnen"]),
-        "geldig_tot": (dt.datetime.utcnow() + dt.timedelta(days=GELDIG_DAGEN)).date().isoformat(),
+        "geldig_tot": (dt.datetime.utcnow() + dt.timedelta(days=geldig_dagen())).date().isoformat(),
     })
     return {**gemeente_regel_opslaan(stad, opslaan), "uit_cache": False}
 
@@ -169,17 +193,16 @@ def factor(city: str) -> tuple[float, str]:
       ja_met_vergunning  0.90  vergunning is een formaliteit met doorlooptijd
       beperkt            0.65  mag alleen in delen van de stad / nee-tenzij
       nee                0.25  vrijwel zeker geen splitsvergunning
-      onbekend           0.85  uitgezocht, maar niet te achterhalen
 
-    Nog niet uitgezocht = 1.00. Zonder de Regelchecker werkt de app dus
-    precies zoals voorheen; hij mag niets stiller maken dan het al was.
+    Niet uitgezocht of onbekend = 1.00 (geen effect). Zonder bruikbare
+    uitkomst van Rik werkt de app dus precies zoals voorheen.
     """
     r = _regel_of_leeg(city)
-    if not r:
-        return 1.0, "niet_uitgezocht"
-    t = (r.get("toegestaan") or "onbekend")
+    t = (r.get("toegestaan") or "onbekend") if r else "onbekend"
+    if t == "onbekend":
+        return 1.0, "niet_uitgezocht"     # geen informatie = geen effect
     f = {"ja": 1.0, "ja_met_vergunning": 0.9, "beperkt": 0.65,
-         "nee": 0.25}.get(t, 0.85)
+         "nee": 0.25}.get(t, 1.0)
     if r.get("zekerheid") == "laag" and t in ("nee", "beperkt"):
         f = min(1.0, f + 0.1)          # onzeker slecht nieuws weegt minder zwaar
     return f, t
@@ -215,7 +238,9 @@ def vergeet_cache() -> None:
 
 
 def _regel_of_leeg(city: str) -> dict:
-    return _alle_regels().get((city or "").strip().lower(), {})
+    from .instellingen import stad
+    alle = _alle_regels()
+    return alle.get(stad(city)) or alle.get((city or "").strip().lower(), {})
 
 
 def regel(city: str) -> dict:
