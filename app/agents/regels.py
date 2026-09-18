@@ -103,12 +103,12 @@ def _check_zoek(stad: str, net: str, bestaand: dict | None, noteer_toegepast) ->
         prompt=(f"Gemeente: {net}\n\nZoek het actuele beleid voor woningsplitsing "
                 f"in {net} op. Mag je daar een woning splitsen in meerdere "
                 f"zelfstandige appartementen, en onder welke voorwaarden?"),
-        max_uses=int(os.getenv("AGENT_WEB_USES", "6")), max_tokens=3000)
+        max_uses=int(os.getenv("AGENT_WEB_USES", "6")))
 
     data = vraag_json(agent="regelchecker", model=MODEL_DENKER,
                       system=SYSTEM_JSON, schema=SCHEMA, naam="beleid",
                       prompt=f"Gemeente: {net}\n\nONDERZOEKSVERSLAG:\n{verslag}",
-                      max_tokens=1200)
+                      max_tokens=8000)
 
     opslaan = {
         "toegestaan": data.get("toegestaan"),

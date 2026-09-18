@@ -110,7 +110,7 @@ def _correctie(oordeel: dict) -> int:
 def beoordeel(deal: dict, listing: dict) -> dict:
     return vraag_json(agent="criticus", model=MODEL_DENKER, system=SYSTEM,
                       prompt=_prompt(deal, listing), schema=SCHEMA,
-                      naam="kritiek", max_tokens=1500)
+                      naam="kritiek", max_tokens=8000)
 
 
 def sla_op(listing_id: int, oordeel: dict) -> dict:
