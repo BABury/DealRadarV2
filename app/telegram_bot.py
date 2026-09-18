@@ -78,6 +78,9 @@ def koppel_webhook() -> dict:
         {"command": "onderzoek", "description": "Laat het team een object uitzoeken (adres of link)"},
         {"command": "ronde", "description": "Laat het team de wachtrij afwerken"},
         {"command": "status", "description": "Wat doet het team, wat kostte het"},
+        {"command": "stop", "description": "Stop wat het team nu doet"},
+        {"command": "uit", "description": "Hoofdschakelaar uit: niets kan het team starten"},
+        {"command": "aan", "description": "Hoofdschakelaar weer aan"},
         {"command": "help", "description": "Uitleg"}]})
     return r
 
@@ -89,8 +92,13 @@ HULP = ("<b>DealRadar-team</b>\n"
         "🔍 <b>/onderzoek</b> Herenstraat 1 — Lotte leest, Rik checkt het beleid, Kees zoekt de zwakke plekken. "
         "Je kunt ook een Funda- of veilinglink plakken.\n"
         "🔁 <b>/ronde</b> — het team werkt de wachtrij in je focussteden af\n"
-        "📊 <b>/status</b> — wat het team doet en wat het vandaag kostte\n\n"
+        "📊 <b>/status</b> — wat het team doet en wat het vandaag kostte\n"
+        "⏹ <b>/stop</b> — stop wat het team nu doet\n"
+        "⏸ <b>/uit</b> · <b>/aan</b> — hoofdschakelaar\n\n"
         "Onder elke dealmelding staat ook een knop om die deal te laten uitzoeken.")
+
+
+UIT_TEKST = "⏸ Het team staat uit (hoofdschakelaar). Stuur /aan om het weer aan te zetten."
 
 
 def _e(x) -> str:
@@ -133,6 +141,9 @@ def rapport_tekst(r: dict) -> str:
     """Het resultaat van een onderzoek, compact voor Telegram."""
     if r.get("status") == "al bezig":
         return "⏳ Het team is al met iets anders bezig. Probeer het over een paar minuten opnieuw."
+    if r.get("status") == "gestopt":
+        return (f"⏹ Onderzoek van <b>{_e(r.get('adres'))}</b> gestopt op jouw verzoek. "
+                f"Kosten tot dan: ${r.get('kosten_usd', 0):.3f}.")
     if r.get("status") in ("uit", "budget_op", "niet_gevonden", "error"):
         return f"⚠️ Onderzoek niet gelukt: {_e(r.get('reden') or r.get('message') or r.get('status'))}"
     lt, rk, ks = r.get("lotte") or {}, r.get("rik") or {}, r.get("kees") or {}
@@ -172,6 +183,11 @@ def verwerk(update: dict, start_onderzoek, start_ronde) -> None:
         chat = str(((cb.get("message") or {}).get("chat") or {}).get("id") or "")
         if chat != _chat():
             return
+        from .agents import hoofdschakelaar_aan
+        if not hoofdschakelaar_aan():
+            _api("answerCallbackQuery", {"callback_query_id": cb.get("id"), "text": "Team staat uit"})
+            stuur(UIT_TEKST)
+            return
         _api("answerCallbackQuery", {"callback_query_id": cb.get("id"), "text": "Team gaat aan de slag"})
         data = cb.get("data") or ""
         if data.startswith("onderzoek:"):
@@ -194,7 +210,26 @@ def verwerk(update: dict, start_onderzoek, start_ronde) -> None:
     if laag.startswith("/status"):
         stuur(_status_tekst())
         return
+    if laag.startswith("/stop"):
+        from .agents import stop_aanvragen
+        stop_aanvragen()
+        stuur("⏹ Stop gegeven. Het team maakt de aanroep af die al onderweg is en houdt dan op.")
+        return
+    if laag.startswith("/uit") or laag.startswith("/aan"):
+        from .agents import stop_aanvragen
+        from .agents.instellingen import opslaan
+        aan = laag.startswith("/aan")
+        opslaan({"team_aan": aan})
+        if not aan:
+            stop_aanvragen()
+        stuur("✅ Team staat <b>aan</b> — het werkt op jouw opdracht." if aan else
+              "⏸ Team staat <b>uit</b>. Niets kan het nog starten tot je /aan stuurt.")
+        return
     if laag.startswith("/ronde"):
+        from .agents import hoofdschakelaar_aan
+        if not hoofdschakelaar_aan():
+            stuur(UIT_TEKST)
+            return
         stuur("🔁 Het team begint aan een ronde over de wachtrij in je focussteden. Ik meld me als het klaar is.")
         threading.Thread(target=start_ronde, daemon=True).start()
         return
@@ -220,7 +255,11 @@ def verwerk(update: dict, start_onderzoek, start_ronde) -> None:
 
 
 def _start(listing_id: int, start_onderzoek) -> None:
+    from .agents import hoofdschakelaar_aan
     from .db import Listing, SessionLocal
+    if not hoofdschakelaar_aan():
+        stuur(UIT_TEKST)
+        return
     with SessionLocal() as s:
         row = s.get(Listing, listing_id)
         naam = f"{row.address}, {row.city}" if row else f"object {listing_id}"
@@ -240,7 +279,7 @@ def _status_tekst() -> str:
         if not agents_enabled():
             return "🤖 Het team staat uit: er is geen ANTHROPIC_API_KEY ingesteld."
         ins = lees()
-        return (f"📊 <b>Team</b>\n"
+        return (f"📊 <b>Team</b> — {'aan' if ins['team_aan'] else '⏸ UIT (hoofdschakelaar)'}\n"
                 f"Wachtrij Lotte: {wachtrij()} objecten in {len(ins['steden'])} focussteden\n"
                 f"Vandaag: ${agent_kosten_vandaag():.2f} van ${dagbudget():.2f} "
                 f"(nog ${budget_over():.2f})\n"

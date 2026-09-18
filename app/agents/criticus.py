@@ -158,12 +158,15 @@ def sla_op(listing_id: int, oordeel: dict) -> dict:
 
 def beoordeel_deals(deals: list[dict]) -> dict:
     """Loopt de topdeals langs. Duurste agent, dus bewust een korte lijst."""
-    from . import begin, klaar, onderwerp, stap
+    from . import AgentGestopt, begin, klaar, onderwerp, stap, stop_gevraagd
     from ..db import Listing, SessionLocal
 
     gedaan, fouten = [], []
     begin("criticus", len(deals))
     for deal in deals:
+        if stop_gevraagd():
+            print("[criticus] gestopt op verzoek", flush=True)
+            break
         if budget_over() <= 0:
             print("[criticus] dagbudget op — rest volgende run", flush=True)
             break
@@ -180,6 +183,8 @@ def beoordeel_deals(deals: list[dict]) -> dict:
                            onderwerp=listing.get("address") or f"object {lid}"):
                 gedaan.append(sla_op(lid, beoordeel(deal, listing)))
             stap("criticus", f"{deal.get('address') or lid} ({deal.get('city') or ''})")
+        except AgentGestopt:
+            break
         except Exception as e:
             fouten.append({"id": lid, "fout": str(e)[:160]})
             stap("criticus", fout=True)

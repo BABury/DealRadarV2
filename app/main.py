@@ -80,8 +80,12 @@ def _run_agents(max_lezen: int | None = None, top_n: int | None = None,
         from .agents.instellingen import lees as _lees
         if not _lees()["automatische_rondes"]:
             return {"status": "overgeslagen", "reden": "automatische rondes staan uit"}
+    from .agents import hoofdschakelaar_aan, stop_wissen
+    if not hoofdschakelaar_aan():
+        return {"status": "uit", "reden": "de hoofdschakelaar van het team staat uit"}
     if not _agent_lock.acquire(blocking=False):
         return {"status": "al bezig"}
+    stop_wissen()
     _agent_state["running"] = True
     _agent_state["started"] = dt.datetime.utcnow().isoformat()
     try:
@@ -106,11 +110,20 @@ def _run_onderzoek(listing_id: int, trigger: str = "knop", na=None) -> dict:
     """Laat het team één object uitzoeken. `na(rapport)` wordt aangeroepen als
     het klaar is (bijvoorbeeld: antwoord terugsturen in Telegram)."""
     import datetime as dt
+    from .agents import hoofdschakelaar_aan, stop_wissen
+    if not hoofdschakelaar_aan():
+        rapport = {"status": "uit", "reden": "de hoofdschakelaar van het team staat uit",
+                   "listing_id": listing_id}
+        ONDERZOEK[listing_id] = {"status": "klaar", "rapport": rapport}
+        if na:
+            na(rapport)
+        return rapport
     if not _agent_lock.acquire(blocking=False):
         rapport = {"status": "al bezig", "listing_id": listing_id}
         if na:
             na(rapport)
         return rapport
+    stop_wissen()
     _agent_state["running"] = True
     _agent_state["started"] = dt.datetime.utcnow().isoformat()
     ONDERZOEK[listing_id] = {"status": "bezig", "gestart": _agent_state["started"]}
@@ -193,6 +206,13 @@ async def lifespan(app: FastAPI):
                                                      hour=sold_hour, minute=0),
                        id="weekly_sold_scrape", max_instances=1)
     _scheduler.start()
+    try:
+        from .db import rondes_afbreken
+        n = rondes_afbreken()
+        if n:
+            print(f"[agents] {n} ronde(s) door herstart afgebroken", flush=True)
+    except Exception as e:
+        print(f"[agents] afgebroken rondes niet bijgewerkt: {e}", flush=True)
     from .scenarios import seed_profiles
     seed_profiles()
     # Telegram-opdrachten: vertel Telegram waar de berichten heen moeten
@@ -589,6 +609,7 @@ def agents_overzicht():
         "laatste_ronde": werk["laatste_ronde"],
         "focussteden": ins["steden"],
         "automatisch": ins["automatische_rondes"],
+        "team_aan": ins["team_aan"],
         "schatting_per_ronde": schatting(ins),
         "laatste_rapport": _agent_state["last_report"],
         "kosten_per_dag": kosten,
@@ -700,12 +721,34 @@ def agents_instellingen_opslaan(body: dict):
     return {"instellingen": d, "schatting_per_ronde": schatting(d)}
 
 
+@app.post("/api/agents/stop")
+def agents_stop():
+    """Stopknop: het team maakt de aanroep af die al onderweg is en stopt dan."""
+    from .agents import stop_aanvragen
+    stop_aanvragen()
+    return {"status": "stop gevraagd", "was_bezig": _agent_state["running"],
+            "uitleg": "Een aanroep die al onderweg is wordt nog afgemaakt; daarna stopt het team."}
+
+
+@app.post("/api/agents/schakelaar")
+def agents_schakelaar(aan: int = Query(...)):
+    """Hoofdschakelaar. Uit = niets kan het team starten, en wat loopt stopt."""
+    from .agents import stop_aanvragen
+    from .agents.instellingen import opslaan
+    d = opslaan({"team_aan": bool(aan)})
+    if not aan:
+        stop_aanvragen()
+    return {"team_aan": d["team_aan"], "was_bezig": _agent_state["running"]}
+
+
 @app.post("/api/agents/onderzoek")
 def agents_onderzoek(listing_id: int = Query(...)):
     """Laat het team één object uitzoeken (Rik → Lotte → Kees)."""
-    from .agents import agents_enabled
+    from .agents import agents_enabled, hoofdschakelaar_aan
     if not agents_enabled():
         return JSONResponse({"error": "Geen ANTHROPIC_API_KEY ingesteld."}, status_code=400)
+    if not hoofdschakelaar_aan():
+        return JSONResponse({"error": "De hoofdschakelaar van het team staat uit."}, status_code=400)
     if _agent_state["running"]:
         return JSONResponse({"error": "Het team is al bezig — probeer het zo nog eens."},
                             status_code=409)
@@ -774,6 +817,9 @@ def agents_run(max_lezen: int = Query(default=0, le=500),
             {"error": "Geen ANTHROPIC_API_KEY ingesteld. Zet die als variabele "
                       "in Railway; zonder key werkt de app zoals voorheen."},
             status_code=400)
+    from .agents import hoofdschakelaar_aan
+    if not hoofdschakelaar_aan():
+        return JSONResponse({"error": "De hoofdschakelaar van het team staat uit."}, status_code=400)
     threading.Thread(target=_run_agents,
                      args=(max_lezen or None, top_n or None, "knop"), daemon=True).start()
     return {"status": "gestart"}

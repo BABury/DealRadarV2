@@ -25,6 +25,8 @@ ALIASSEN = {"den-haag": "den haag", "'s-gravenhage": "den haag", "s-gravenhage":
             "'s-hertogenbosch": "den bosch", "s-hertogenbosch": "den bosch"}
 
 STANDAARD = {
+    # Hoofdschakelaar: uit = niets kan het team starten (knop, Telegram, schema)
+    "team_aan": True,
     "steden": FOCUS_STANDAARD,
     "dagbudget_usd": float(os.getenv("AGENT_MAX_USD_PER_DAY", "2.0")),
     "denkniveau": "low",            # low | medium | high — hoe diep Sonnet nadenkt

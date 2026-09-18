@@ -499,6 +499,19 @@ def agent_kosten_overzicht(dagen: int = 7) -> list[dict]:
 LOG_INVOER_MAX = int(os.getenv("AGENT_LOG_INVOER_MAX", "12000"))
 
 
+def rondes_afbreken() -> int:
+    """Bij het opstarten: rondes die nog op 'bezig' staan zijn door een herstart
+    onderbroken. Markeer ze eerlijk als afgebroken in plaats van eeuwig bezig."""
+    with SessionLocal() as s:
+        n = 0
+        for r in s.query(AgentRonde).filter(AgentRonde.status == "bezig").all():
+            r.status = "afgebroken"
+            r.klaar = r.klaar or dt.datetime.utcnow()
+            n += 1
+        s.commit()
+        return n
+
+
 def ronde_start(trigger: str = "schema") -> int:
     with SessionLocal() as s:
         r = AgentRonde(trigger=trigger[:20], status="bezig")

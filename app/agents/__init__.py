@@ -78,7 +78,44 @@ def klaar(agent: str, samenvatting: str = "") -> None:
 
 
 class AgentUit(RuntimeError):
-    """Geen API-key, of het dagbudget is op."""
+    """Geen API-key, het dagbudget is op, de hoofdschakelaar staat uit, of er is
+    op stop gedrukt."""
+
+
+class AgentGestopt(AgentUit):
+    """Jij hebt op stop gedrukt."""
+
+
+# ── Stopknop ─────────────────────────────────────────────────────
+# Elke agent kijkt vóór elke modelaanroep of er op stop is gedrukt. Een
+# aanroep die al loopt maakt hij nog af (die is al onderweg naar Anthropic);
+# daarna houdt hij op. Het kost dus hooguit die ene aanroep.
+_stop = threading.Event()
+
+
+def stop_aanvragen() -> None:
+    _stop.set()
+
+
+def stop_gevraagd() -> bool:
+    return _stop.is_set()
+
+
+def stop_wissen() -> None:
+    """Bij het begin van een nieuwe opdracht."""
+    _stop.clear()
+
+
+def hoofdschakelaar_aan() -> bool:
+    from .instellingen import lees
+    return bool(lees()["team_aan"])
+
+
+def _mag_verder() -> None:
+    if _stop.is_set():
+        raise AgentGestopt("gestopt op jouw verzoek")
+    if not hoofdschakelaar_aan():
+        raise AgentUit("de hoofdschakelaar van het team staat uit")
 
 
 # ── Context voor het logboek ─────────────────────────────────────
@@ -245,6 +282,7 @@ def vraag_json(*, agent: str, model: str, system: str, prompt: str,
     """
     if not agents_enabled():
         raise AgentUit("ANTHROPIC_API_KEY ontbreekt")
+    _mag_verder()
     if budget_over() <= 0:
         raise AgentUit(f"dagbudget ${dagbudget():.2f} verbruikt")
 
@@ -291,6 +329,7 @@ def onderzoek(*, agent: str, model: str, system: str, prompt: str,
     """
     if not agents_enabled():
         raise AgentUit("ANTHROPIC_API_KEY ontbreekt")
+    _mag_verder()
     if budget_over() <= 0:
         raise AgentUit(f"dagbudget ${dagbudget():.2f} verbruikt")
 
@@ -311,7 +350,7 @@ def onderzoek(*, agent: str, model: str, system: str, prompt: str,
             tok_in += int(getattr(r.usage, "input_tokens", 0) or 0)
             tok_out += int(getattr(r.usage, "output_tokens", 0) or 0)
             blokken.extend(r.content)
-            if getattr(r, "stop_reason", "") != "pause_turn":
+            if getattr(r, "stop_reason", "") != "pause_turn" or _stop.is_set():
                 break
             msgs = [{"role": "user", "content": prompt},
                     {"role": "assistant", "content": r.content}]

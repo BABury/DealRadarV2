@@ -236,6 +236,11 @@
       <span id="agent-team-av" style="display:inline-flex; gap:2px;"></span>
       <span id="agent-pill" class="muted" style="font-size:12px"></span>
       <span style="flex:1"></span>
+      <label title="Hoofdschakelaar: uit = niets kan het team starten (knop, Telegram, schema), en wat loopt stopt"
+             style="font-size:12px; display:inline-flex; gap:6px; align-items:center; white-space:nowrap;">
+        <input type="checkbox" id="agent-schakelaar" onchange="zetSchakelaar(this.checked)"> team aan</label>
+      <button id="btn-agent-stop" onclick="stopAgents()" hidden
+              style="background:var(--hot); color:#fff; border-color:var(--hot); font-weight:600;">⏹ Stop</button>
       <button onclick="runAgents()" id="btn-agents2" style="opacity:.9;">▶ Nu een ronde draaien</button>
       <button onclick="toonLogboek({})" title="Elke stap van elke agent: wat ze zagen, antwoordden en veranderden">📜 Logboek</button>
       <button onclick="toonRondes()" title="Per ronde: welke objecten kregen een andere score">🔁 Rondes</button>
@@ -462,12 +467,39 @@ async function loadAgentStatus() {
       if (btn) btn.disabled = true;
       return;
     }
-    if (btn) btn.disabled = false;
+    if (btn) {
+      btn.disabled = false;
+      // Tijdens werk wordt de knop in de kopbalk een stopknop: geld stopt met één klik
+      btn.textContent = s.running ? "⏹ Stop agents" : "🤖 Agents";
+      btn.onclick = s.running ? stopAgents : runAgents;
+      btn.style.background = s.running ? "var(--hot)" : "";
+      btn.style.color = s.running ? "#fff" : "";
+    }
     const bezig = s.running ? " · bezig…" : "";
     el.innerHTML = `<span title="Dagbudget $${s.dagbudget_usd} · ${s.gemeenten_bekend} gemeenten uitgezocht · rondes om ${s.uren} uur">` +
       `🤖 agents aan · $${(s.vandaag_usd || 0).toFixed(2)} vandaag${bezig}</span>`;
     if (s.running) setTimeout(loadAgentStatus, 8000);
   } catch (e) { el.textContent = ""; }
+}
+
+async function stopAgents() {
+  const k = document.getElementById("btn-agent-stop");
+  if (k) { k.disabled = true; k.textContent = "⏹ stoppen…"; }
+  try {
+    const r = await (await fetch("/api/agents/stop", { method: "POST" })).json();
+    const pill = document.getElementById("agent-pill");
+    if (pill) pill.innerHTML = `<span style="color:var(--warn)">⏹ stop gegeven</span> — ${r.uitleg || ""}`;
+  } catch (e) { alert("Stoppen mislukt — probeer opnieuw."); }
+  setTimeout(() => { if (k) { k.disabled = false; k.textContent = "⏹ Stop"; } loadAgentPanel(); loadAgentStatus(); }, 2500);
+}
+
+async function zetSchakelaar(aan) {
+  if (!aan && !confirm("Team uitzetten? Wat nu loopt stopt, en niets kan het team starten tot je het weer aanzet.")) {
+    document.getElementById("agent-schakelaar").checked = true;
+    return;
+  }
+  await fetch("/api/agents/schakelaar?aan=" + (aan ? 1 : 0), { method: "POST" });
+  loadAgentPanel(); loadAgentStatus();
 }
 
 async function runAgents() {
@@ -649,7 +681,15 @@ async function loadAgentPanel() {
       ? `<span style="color:var(--accent)">aan</span> · ${s.automatisch ? `ook automatisch om ${uren}` : "werkt alleen op jouw opdracht"}${s.ronde_bezig ? ' · <span style="color:var(--accent)">bezig…</span>' : ""}`
       : '<span style="color:var(--warn)">uit — zet ANTHROPIC_API_KEY in Railway</span>';
     const knop = document.getElementById("btn-agents2");
-    if (knop) knop.disabled = !s.aan || s.ronde_bezig;
+    if (knop) knop.disabled = !s.aan || s.ronde_bezig || !s.team_aan;
+    const stopK = document.getElementById("btn-agent-stop");
+    if (stopK) stopK.hidden = !s.ronde_bezig;
+    const sch = document.getElementById("agent-schakelaar");
+    if (sch) { sch.checked = !!s.team_aan; sch.disabled = !s.aan; }
+    if (s.aan && !s.team_aan) {
+      document.getElementById("agent-pill").innerHTML =
+        '<span style="color:var(--warn)">⏸ uit (hoofdschakelaar)</span> — niets kan het team starten';
+    }
 
     body.innerHTML = `
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;">
@@ -884,7 +924,8 @@ async function toonRondes() {
       ${rondes.map(r => `<tr style="cursor:pointer" onclick="toonRonde(${r.id})">
         <td>${r.id}</td><td>${new Date(r.gestart + "Z").toLocaleString("nl-NL")}</td>
         <td>${r.trigger === "knop" ? "▶ knop" : "⏰ schema"}</td>
-        <td style="color:${r.status === "ok" ? "var(--accent)" : r.status === "bezig" ? "var(--accent2)" : "var(--hot)"}">${r.status}</td>
+        <td style="color:${r.status === "ok" ? "var(--accent)" : r.status === "bezig" ? "var(--accent2)"
+                         : ["gestopt", "afgebroken", "deels"].includes(r.status) ? "var(--warn)" : "var(--hot)"}">${r.status}</td>
         <td><b>${r.aantal_wijzigingen}</b> objecten</td><td>$${(r.kosten_usd || 0).toFixed(3)}</td>
         <td><a href="#" onclick="event.stopPropagation(); toonLogboek({ronde:${r.id}}); return false;">logboek →</a></td></tr>`).join("")}
       </tbody></table>` : '<div class="muted" style="font-size:13px;">Nog geen ronde gedraaid.</div>'}
@@ -1146,12 +1187,19 @@ async function laatUitzoeken(id) {
       const wie = (ov.agents || []).find(a => a.bezig);
       const naam = wie ? `${avatar(wie.naam, 18, true)} ${(AGENTS[wie.naam] || {}).naam} is bezig…` : "het team is bezig…";
       if (el) el.innerHTML = `<span style="display:inline-flex; gap:6px; align-items:center; color:var(--accent2)">${naam}
-        <span class="muted">${Math.round((Date.now() - t0) / 1000)}s</span></span>`;
+        <span class="muted">${Math.round((Date.now() - t0) / 1000)}s</span>
+        <a href="#" onclick="stopAgents(); return false;" style="color:var(--hot)">⏹ stop</a></span>`;
       loadAgentPanel();
       setTimeout(kijk, 4000);
       return;
     }
     const r = s.rapport || {};
+    if (el && r.status === "gestopt") {
+      el.innerHTML = `<span style="color:var(--warn)">⏹ gestopt op jouw verzoek</span> · kosten tot dan $${(r.kosten_usd || 0).toFixed(3)}`;
+      if (document.getElementById("ond-knop-" + id)) document.getElementById("ond-knop-" + id).disabled = false;
+      loadAgentPanel();
+      return;
+    }
     if (el) el.innerHTML = r.status === "ok" || r.status === "deels"
       ? `<span style="color:var(--accent)">✓ klaar</span> — score ${r.score_voor} → <b>${r.score_na}</b> · $${(r.kosten_usd || 0).toFixed(3)}
          ${r.status === "deels" ? ' · <span style="color:var(--warn)">niet alles lukte, zie spoor</span>' : ""}`

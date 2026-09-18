@@ -141,12 +141,16 @@ def lees_batch(listing_ids: list[int], max_objecten: int | None = None) -> dict:
     een grote achterstand over meerdere runs wordt weggewerkt."""
     from ..db import Listing, SessionLocal
 
-    from . import begin, klaar, onderwerp, stap
+    from . import AgentGestopt, begin, klaar, onderwerp, stap, stop_gevraagd
 
     gedaan, fouten, overgeslagen = [], [], 0
     ids = listing_ids[:max_objecten] if max_objecten else listing_ids
     begin("lezer", len(ids))
     for lid in ids:
+        if stop_gevraagd():
+            overgeslagen = len(ids) - len(gedaan) - len(fouten)
+            print(f"[lezer] gestopt op verzoek — {overgeslagen} objecten niet gelezen", flush=True)
+            break
         if budget_over() <= 0:
             overgeslagen = len(ids) - len(gedaan) - len(fouten)
             print(f"[lezer] dagbudget op — {overgeslagen} objecten volgende run",
@@ -162,6 +166,8 @@ def lees_batch(listing_ids: list[int], max_objecten: int | None = None) -> dict:
                            onderwerp=d.get("address") or f"object {lid}"):
                 gedaan.append(sla_op(lid, beoordeel(d)))
             stap("lezer", f"{d.get('address') or lid} ({d.get('city') or ''})")
+        except AgentGestopt:
+            break
         except Exception as e:
             fouten.append({"id": lid, "fout": str(e)[:160]})
             stap("lezer", fout=True)

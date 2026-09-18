@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import traceback
 
-from . import VERBRUIK, agents_enabled, budget_over, status
+from . import VERBRUIK, agents_enabled, budget_over, status, stop_gevraagd
 from . import criticus as agent_criticus
 from . import lezer as agent_lezer
 from . import regels as agent_regels
@@ -259,7 +259,9 @@ def _ronde(max_lezen, top_n, forceer_regels, usd_start: float) -> dict:
 
     # 2. Rik — alleen focussteden die nog niet (geldig) zijn uitgezocht
     try:
-        if not ins["rik_aan"]:
+        if stop_gevraagd():
+            report["regelchecker"] = {"gecheckt": 0, "gestopt": True}
+        elif not ins["rik_aan"]:
             report["regelchecker"] = {"gecheckt": 0, "uit": True}
         else:
             steden = _steden_van_kanshebbers(ins["rik_steden_per_ronde"])
@@ -279,7 +281,9 @@ def _ronde(max_lezen, top_n, forceer_regels, usd_start: float) -> dict:
 
     # 4. Kees — alleen de kop van de lijst in de focussteden
     try:
-        if not ins["kees_aan"]:
+        if stop_gevraagd():
+            report["criticus"] = {"beoordeeld": 0, "gestopt": True}
+        elif not ins["kees_aan"]:
             report["criticus"] = {"beoordeeld": 0, "uit": True}
         else:
             deals = _topdeals(top_n or ins["kees_top_n"])
@@ -299,6 +303,8 @@ def _ronde(max_lezen, top_n, forceer_regels, usd_start: float) -> dict:
     if any((report.get(n) or {}).get("fouten") or (report.get(n) or {}).get("fout")
            for n in ("lezer", "regelchecker", "criticus")):
         report["status"] = "deels"
+    if stop_gevraagd():
+        report["status"] = "gestopt"
     report["kosten"] = {"deze_ronde_usd": round(VERBRUIK["usd"] - usd_start, 4),
                         "over_vandaag_usd": round(budget_over(), 4)}
     try:
@@ -319,6 +325,10 @@ def _ronde(max_lezen, top_n, forceer_regels, usd_start: float) -> dict:
 #   Lotte  leest het object (opnieuw, ook als ze het eerder las)
 #   Kees   valt de doorgerekende deal aan
 # Alles komt als één ronde in het logboek, met score voor → na.
+
+class _Gestopt(Exception):
+    """Intern: stopknop ingedrukt tussen twee stappen van een onderzoek."""
+
 
 def _deal_voor(listing: dict) -> dict:
     """De doorgerekende cijfers voor één object, in dezelfde vorm als een
@@ -381,12 +391,16 @@ def onderzoek_object(listing_id: int, trigger: str = "knop") -> dict:
             except Exception as e:
                 rapport["regelchecker"] = {"fout": str(e)[:200]}
             # 2. Lotte: altijd (opnieuw) lezen op verzoek
+            if stop_gevraagd():
+                raise _Gestopt()
             with SessionLocal() as s:
                 heeft_tekst = bool((s.get(Listing, listing_id).context or "").strip())
             rapport["lezer"] = (agent_lezer.lees_batch([listing_id]) if heeft_tekst
                                 else {"gelezen": 0, "geen_tekst": True})
             compute_scores()
             # 3. Kees: de doorgerekende deal aanvallen
+            if stop_gevraagd():
+                raise _Gestopt()
             with SessionLocal() as s:
                 listing = s.get(Listing, listing_id).to_dict()
             deal = _deal_voor(listing)
@@ -396,6 +410,10 @@ def onderzoek_object(listing_id: int, trigger: str = "knop") -> dict:
         if any((rapport.get(n) or {}).get("fouten") or (rapport.get(n) or {}).get("fout")
                for n in ("lezer", "regelchecker", "criticus")):
             rapport["status"] = "deels"
+        if stop_gevraagd():
+            rapport["status"] = "gestopt"
+    except _Gestopt:
+        rapport["status"] = "gestopt"
     finally:
         wijz: list[dict] = []
         try:

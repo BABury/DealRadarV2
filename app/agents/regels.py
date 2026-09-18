@@ -161,12 +161,15 @@ def _check_zoek(stad: str, net: str, bestaand: dict | None, noteer_toegepast) ->
 
 def check_steden(steden: list[str], forceer: bool = False) -> dict:
     """Werkt een lijst gemeenten af; stopt zodra het budget op is."""
-    from . import begin, budget_over, klaar, stap
+    from . import AgentGestopt, begin, budget_over, klaar, stap, stop_gevraagd
 
     gedaan, fouten = [], []
     lijst = list(dict.fromkeys(s.strip().lower() for s in steden if s and s.strip()))
     begin("regelchecker", len(lijst))
     for stad in lijst:
+        if stop_gevraagd():
+            print("[regelchecker] gestopt op verzoek", flush=True)
+            break
         if budget_over() <= 0:
             print("[regelchecker] dagbudget op — rest volgende run", flush=True)
             break
@@ -177,6 +180,8 @@ def check_steden(steden: list[str], forceer: bool = False) -> dict:
                                "uit_cache": r.get("uit_cache"),
                                "zekerheid": r.get("zekerheid")})
             stap("regelchecker", stad)
+        except AgentGestopt:
+            break
         except Exception as e:
             fouten.append({"stad": stad, "fout": str(e)[:160]})
             stap("regelchecker", stad, fout=True)
