@@ -30,10 +30,9 @@ def _cities() -> list[str]:
     Eén lijst voor de hele app — wat je in het dashboard als focus kiest, wordt
     ook gescrapet. FUNDA_CITIES (Railway-variabele) gaat vóór, voor als je het
     ooit los wilt zetten."""
-    raw = os.getenv("FUNDA_CITIES", "")
-    handmatig = [c.strip().lower() for c in raw.split(",") if c.strip()]
-    if handmatig:
-        return handmatig
+    # Het dashboard wint. Een oude Railway-variabele FUNDA_CITIES liet op
+    # 18 sept Den Haag scrapen terwijl de focus iets anders was; die telt nu
+    # alleen nog als de instellingen onleesbaar zijn.
     try:
         from ..agents.instellingen import lees
         steden = [_slug(c) for c in lees()["steden"]]
@@ -41,6 +40,10 @@ def _cities() -> list[str]:
             return steden
     except Exception as e:
         print(f"[funda-browser] focussteden niet geladen: {e}", flush=True)
+    raw = os.getenv("FUNDA_CITIES", "")
+    handmatig = [_slug(c) for c in raw.split(",") if c.strip()]
+    if handmatig:
+        return handmatig
     return ["amsterdam", "rotterdam", "den-haag", "utrecht", "eindhoven", "haarlem",
             "leiden", "delft", "groningen", "nijmegen", "arnhem", "zwolle"]
 
@@ -48,13 +51,11 @@ def _cities() -> list[str]:
 def _max_details() -> int:
     """Detailpagina's per stad per run. Die leveren de omschrijving waar Lotte
     mee werkt. Instelbaar in het dashboard (FUNDA_MAX_DETAILS gaat vóór)."""
-    if os.getenv("FUNDA_MAX_DETAILS"):
-        return int(os.getenv("FUNDA_MAX_DETAILS"))
     try:
         from ..agents.instellingen import lees
         return int(lees()["funda_details_per_stad"])
     except Exception:
-        return 6
+        return int(os.getenv("FUNDA_MAX_DETAILS", "6"))
 
 
 def search_url(city: str, max_price: int, page: int = 1, sort_new: bool = True) -> str:
@@ -163,17 +164,67 @@ DETAIL_JS = """() => {
       if (k && v && k.length < 60) kenmerken[k] = v;
     }
   });
-  let omschrijving = '';
-  const cand = document.querySelector('[data-testid="listing-description"]')
-            || document.querySelector('.object-description-body')
-            || document.querySelector('main article');
-  if (cand) omschrijving = cand.innerText;
+  // Omschrijving: Funda wijzigt de opmaak geregeld, dus meerdere routes.
+  // De eerste die echt tekst oplevert (≥ 200 tekens) wint; 'bron' zegt welke.
+  let omschrijving = '', bron = '';
+  const lang = t => (t || '').trim().length >= 200;
+  const tekstVan = el => (el && (el.innerText || '').trim()) || '';
+  // a. bekende/waarschijnlijke selectors
+  for (const sel of ['[data-testid="listing-description"]', '[data-testid="object-description"]',
+                     '[data-testid*="description"]', '.object-description-body',
+                     '#description', '[class*="description"]', '[class*="Description"]']) {
+    const t = tekstVan(document.querySelector(sel));
+    if (lang(t)) { omschrijving = t; bron = 'selector ' + sel; break; }
+  }
+  // b. de kop 'Omschrijving' en wat eronder staat
+  if (!omschrijving) {
+    for (const h of document.querySelectorAll('h2, h3, h4')) {
+      if (!/omschrijving/i.test(h.innerText || '')) continue;
+      const blok = h.closest('section') || h.parentElement;
+      const t = tekstVan(blok);
+      if (lang(t)) { omschrijving = t; bron = 'kop Omschrijving'; break; }
+    }
+  }
+  // c. gestructureerde data (JSON-LD) in de pagina
+  if (!omschrijving) {
+    const zoek = o => {
+      if (!o || typeof o !== 'object') return '';
+      if (typeof o.description === 'string' && lang(o.description)) return o.description;
+      for (const v of Object.values(o)) { const r = zoek(v); if (r) return r; }
+      return '';
+    };
+    for (const sc of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try { const t = zoek(JSON.parse(sc.textContent)); if (t) { omschrijving = t; bron = 'json-ld'; break; } }
+      catch (e) {}
+    }
+  }
+  // d. langste "description" in de meegestuurde paginadata (Nuxt)
+  if (!omschrijving) {
+    let beste = '';
+    for (const sc of document.querySelectorAll('script')) {
+      const txt = sc.textContent || '';
+      if (txt.length < 500) continue;
+      const re = /"description"\\s*:\\s*"((?:[^"\\\\]|\\\\.){200,})"/g;
+      let m;
+      while ((m = re.exec(txt))) { if (m[1].length > beste.length) beste = m[1]; }
+    }
+    if (beste) {
+      try { omschrijving = JSON.parse('"' + beste + '"'); } catch (e) { omschrijving = beste; }
+      bron = 'paginadata';
+    }
+  }
+  // e. laatste redmiddel: de korte samenvatting in de meta-tags
+  if (!omschrijving) {
+    const m = document.querySelector('meta[property="og:description"], meta[name="description"]');
+    if (m && m.content) { omschrijving = m.content; bron = 'meta (kort)'; }
+  }
   const img = document.querySelector('main img');
   const mk = document.querySelector('[data-testid="listing-broker"], a[href*="/makelaar/"]');
   return {
     kenmerken,
     h1: (document.querySelector('h1') || {}).innerText || '',
-    omschrijving: (omschrijving || '').slice(0, 6000),
+    omschrijving: (omschrijving || '').slice(0, 8000),
+    omschrijving_bron: bron,
     foto: img ? img.src : '',
     makelaar: mk ? mk.innerText.trim() : ''
   };
@@ -267,6 +318,35 @@ def diagnose(city: str = "eindhoven") -> dict:
             "seconden": round(time.time() - t0, 1)}
 
 
+def diagnose_detail(url: str | None = None) -> dict:
+    """Test: vindt de scraper de omschrijving op een detailpagina? Eén pagina,
+    geen opslag. Zonder url: een willekeurig bekend Funda-object uit de focus."""
+    if not url:
+        from sqlalchemy import func
+        from ..db import Listing, SessionLocal
+        with SessionLocal() as s:
+            row = (s.query(Listing.url).filter(Listing.source == "funda",
+                                               Listing.url.like("%/detail/koop/%"))
+                   .order_by(func.random()).first())
+        url = row[0] if row else None
+    if not url:
+        return {"ok": False, "fout": "geen Funda-object om te testen"}
+    t0 = time.time()
+    try:
+        with Browser() as br:
+            br.min_delay = br.max_delay = 0.1
+            html, det = br.open(url, evaluate=DETAIL_JS, retries=0)
+    except Exception as e:
+        return {"ok": False, "url": url, "fout": f"{type(e).__name__}: {str(e)[:200]}"}
+    if html is None:
+        return {"ok": False, "url": url, "geblokkeerd": True}
+    det = det or {}
+    oms = det.get("omschrijving") or ""
+    return {"ok": len(oms) >= 200, "url": url, "bron": det.get("omschrijving_bron") or "niets gevonden",
+            "lengte": len(oms), "begin": oms[:400], "kenmerken": len(det.get("kenmerken") or {}),
+            "h1": (det.get("h1") or "")[:120], "seconden": round(time.time() - t0, 1)}
+
+
 def _slug(city: str) -> str:
     """Funda-gebiedsnaam: 'Den Haag' -> 'den-haag'."""
     s = city.strip().lower().replace("'s-gravenhage", "den-haag")
@@ -313,14 +393,11 @@ def _rotatie(cities: list[str]) -> list[str]:
     steden te doen en meerdere runs per dag te plannen blijven we eronder, en
     komt toch elke stad regelmatig langs. De positie volgt uit het aantal eerdere
     Funda-runs in de database, dus dit overleeft herstarts."""
-    if os.getenv("FUNDA_CITIES_PER_RUN"):
-        per_run = int(os.getenv("FUNDA_CITIES_PER_RUN"))
-    else:
-        try:
-            from ..agents.instellingen import lees
-            per_run = int(lees()["funda_steden_per_run"])
-        except Exception:
-            per_run = 2
+    try:
+        from ..agents.instellingen import lees
+        per_run = int(lees()["funda_steden_per_run"])
+    except Exception:
+        per_run = int(os.getenv("FUNDA_CITIES_PER_RUN", "2"))
     if per_run <= 0 or per_run >= len(cities):
         return cities
     try:

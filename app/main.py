@@ -469,6 +469,14 @@ def diag_funda(city: str = Query(default="eindhoven")):
     return diagnose(city)
 
 
+@app.get("/api/diag/funda-detail")
+def diag_funda_detail(url: str = Query(default="")):
+    """Vindt de scraper de omschrijving op een Funda-detailpagina? Eén pagina,
+    niets wordt opgeslagen. Laat zien via welke route de tekst gevonden werd."""
+    from .scrapers.funda_browser import diagnose_detail
+    return diagnose_detail(url or None)
+
+
 @app.get("/api/export-pnl")
 def export_pnl(region: str = Query(default="focus"),
                profile: str = Query(default="standaard"),
