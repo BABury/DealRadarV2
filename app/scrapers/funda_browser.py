@@ -146,6 +146,9 @@ def parse_detail(data: dict, url: str) -> dict | None:
         "photo_url": data.get("foto") or "",
         "broker": (data.get("makelaar") or "")[:200],
         **analysed,
+        # De hele tekst, niet alleen de trefwoord-snippers in 'context': dit is
+        # wat Lotte leest. Zonder trefwoord bleef er anders niets over.
+        "omschrijving": omschrijving.strip()[:8000],
     }
 
 
@@ -267,9 +270,10 @@ def diagnose(city: str = "eindhoven") -> dict:
 def _slug(city: str) -> str:
     """Funda-gebiedsnaam: 'Den Haag' -> 'den-haag'."""
     s = city.strip().lower().replace("'s-gravenhage", "den-haag")
-    # Den Bosch heet bij Funda officieel 's-Hertogenbosch
+    # Funda's gebied voor Den Bosch is 'den-bosch' ('s-hertogenbosch' kent
+    # Funda niet als gebied en geeft dan heel Nederland terug — 18 sept 2026).
     if s in ("den bosch", "den-bosch", "'s-hertogenbosch", "s-hertogenbosch"):
-        return "s-hertogenbosch"
+        return "den-bosch"
     return re.sub(r"\s+", "-", s)
 
 
@@ -421,7 +425,7 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
         # anders krijgt een huis dat ooit als kaartje binnenkwam nooit tekst.
         zonder_tekst = {u for (u,) in s.query(Listing.url).filter(
             Listing.source == "funda",
-            (Listing.context.is_(None)) | (Listing.context == "")) if u}
+            (Listing.omschrijving.is_(None)) | (Listing.omschrijving == "")) if u}
     print(f"[funda-browser] {len(bekend)} objecten al bekend", flush=True)
 
     cities = _cities()

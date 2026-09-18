@@ -78,6 +78,9 @@ class Listing(Base):
     flag_splitsvergunning: Mapped[bool] = mapped_column(Boolean, default=False)
     flag_verhuurd: Mapped[bool] = mapped_column(Boolean, default=False)
     context: Mapped[str] = mapped_column(Text, default="")
+    # Volledige omschrijving van de detailpagina (context = alleen snippers
+    # rond trefwoorden). Niet in to_dict(): te groot voor de lijst van 1000.
+    omschrijving: Mapped[str] = mapped_column(Text, default="")
 
     # Publicatiedatum op de bron (Funda "aangeboden sinds") -> days-on-market.
     # Let op: verschilt van first_seen (wanneer ONZE scraper het object zag).
@@ -144,6 +147,7 @@ class Listing(Base):
                 "verhuurd": self.flag_verhuurd,
             },
             "context": self.context,
+            "heeft_omschrijving": bool((self.omschrijving or "").strip()),
             "published": self.published,
             "days_on_market": days_on_market(self.published),
             "auction_date": self.auction_date,
@@ -424,7 +428,8 @@ def init_db() -> None:
                             "ai_samenvatting": "TEXT",
                             "ai_bevinding": "TEXT",
                             "ai_advies": "VARCHAR(20) DEFAULT ''",
-                            "ai_checked": "TIMESTAMP"}.items():
+                            "ai_checked": "TIMESTAMP",
+                            "omschrijving": "TEXT"}.items():
             if _name not in existing:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE listings ADD COLUMN {_name} {_ddl}"))

@@ -74,7 +74,8 @@ VELDEN = ("source", "address", "city", "neighbourhood", "postcode",
 
 def _prompt(d: dict) -> str:
     feiten = {k: d.get(k) for k in VELDEN if d.get(k) not in (None, "", 0)}
-    tekst = kort(d.get("context"), int(6000))
+    # Volledige omschrijving als die er is; anders de trefwoord-snippers
+    tekst = kort(d.get("omschrijving") or d.get("context"), int(6000))
     return (f"OBJECTGEGEVENS (uit de bron):\n{json.dumps(feiten, ensure_ascii=False, indent=1)}\n\n"
             f"OMSCHRIJVING / VEILINGTEKST:\n{tekst or '(geen tekst beschikbaar)'}\n\n"
             "Beoordeel dit object volgens je instructies.")
@@ -158,7 +159,7 @@ def lees_batch(listing_ids: list[int], max_objecten: int | None = None) -> dict:
             break
         with SessionLocal() as s:
             row = s.get(Listing, lid)
-            d = row.to_dict() if row else None
+            d = {**row.to_dict(), "omschrijving": row.omschrijving or ""} if row else None
         if not d:
             continue
         try:

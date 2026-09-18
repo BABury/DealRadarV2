@@ -88,7 +88,7 @@ def _prompt(deal: dict, listing: dict) -> str:
         f"{json.dumps(cijfers, ensure_ascii=False, indent=1)}\n\n"
         f"SPLITSBELEID GEMEENTE:\n{regelchecker.voor_prompt(deal.get('city') or '')}\n\n"
         f"FEITEN UIT DE ADVERTENTIE (agent Lezer):\n{als_json(lezer) if lezer else '(nog niet gelezen)'}\n\n"
-        f"ORIGINELE TEKST:\n{kort(listing.get('context'), 3500) or '(geen tekst)'}\n\n"
+        f"ORIGINELE TEKST:\n{kort(listing.get('omschrijving') or listing.get('context'), 3500) or '(geen tekst)'}\n\n"
         "Val deze kans aan volgens je instructies."
     )
 
@@ -175,7 +175,7 @@ def beoordeel_deals(deals: list[dict]) -> dict:
             continue
         with SessionLocal() as s:
             row = s.get(Listing, lid)
-            listing = row.to_dict() if row else None
+            listing = {**row.to_dict(), "omschrijving": row.omschrijving or ""} if row else None
         if not listing:
             continue
         try:

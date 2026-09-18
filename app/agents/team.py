@@ -51,7 +51,9 @@ def _kandidaten(limit: int | None = None) -> list[int]:
         q = (s.query(Listing)
              .filter(Listing.is_demo.is_(False),
                      Listing.ai_checked.is_(None),
-                     Listing.context.isnot(None), Listing.context != "",
+                     # tekst = volledige omschrijving óf trefwoord-snippers
+                     ((Listing.omschrijving.isnot(None)) & (Listing.omschrijving != "")) |
+                     ((Listing.context.isnot(None)) & (Listing.context != "")),
                      func.lower(func.trim(Listing.city)).in_(sorted(focus_varianten(ins["steden"]))),
                      Listing.living_area >= ins["lotte_min_m2"]))
         if ins["lotte_max_m2"]:
@@ -394,7 +396,8 @@ def onderzoek_object(listing_id: int, trigger: str = "knop") -> dict:
             if stop_gevraagd():
                 raise _Gestopt()
             with SessionLocal() as s:
-                heeft_tekst = bool((s.get(Listing, listing_id).context or "").strip())
+                _r = s.get(Listing, listing_id)
+                heeft_tekst = bool((_r.omschrijving or _r.context or "").strip())
             rapport["lezer"] = (agent_lezer.lees_batch([listing_id]) if heeft_tekst
                                 else {"gelezen": 0, "geen_tekst": True})
             compute_scores()
@@ -402,7 +405,8 @@ def onderzoek_object(listing_id: int, trigger: str = "knop") -> dict:
             if stop_gevraagd():
                 raise _Gestopt()
             with SessionLocal() as s:
-                listing = s.get(Listing, listing_id).to_dict()
+                _r = s.get(Listing, listing_id)
+                listing = {**_r.to_dict(), "omschrijving": _r.omschrijving or ""}
             deal = _deal_voor(listing)
             deal["id"] = listing_id
             rapport["criticus"] = agent_criticus.beoordeel_deals([deal])
