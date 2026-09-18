@@ -72,6 +72,32 @@
   .vx thead th { padding: 6px 8px; position: static; }
   .vx-income { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
   .vx-income b { font-size: 15px; }
+  /* ── Agent-team: avatars, logboek, spoor ── */
+  .av { display:inline-block; border-radius:50%; flex-shrink:0; vertical-align:middle; line-height:0; }
+  .av svg { width:100%; height:100%; display:block; }
+  .av.bezig { animation: avpuls 1.6s ease-out infinite; }
+  @keyframes avpuls { 0% { box-shadow:0 0 0 0 currentColor; } 70% { box-shadow:0 0 0 7px transparent; } 100% { box-shadow:0 0 0 0 transparent; } }
+  .ag-feed { display:grid; gap:2px; }
+  .ag-item { display:grid; grid-template-columns:28px 1fr auto; gap:10px; align-items:start;
+             padding:8px 10px; border-radius:8px; cursor:pointer; }
+  .ag-item:hover { background:var(--panel2); }
+  .ag-item.fout { border-left:2px solid var(--hot); }
+  .ag-wie { font-size:13px; }
+  .ag-kern { font-size:12px; color:var(--muted); margin-top:2px; }
+  .ag-meta { font-size:11px; color:var(--muted); text-align:right; white-space:nowrap; }
+  .ag-effect { font-size:11px; padding:1px 6px; border-radius:5px; background:var(--panel2); margin-left:6px; white-space:nowrap; }
+  .ag-tabs { display:flex; gap:4px; flex-wrap:wrap; margin:10px 0; }
+  .ag-tabs button { font-size:12px; padding:4px 10px; }
+  .ag-tabs button.on { border-color:var(--accent2); color:var(--accent2); }
+  .ag-pre { white-space:pre-wrap; word-break:break-word; font-size:12px; line-height:1.5; background:var(--bg);
+            border:1px solid var(--border); border-radius:8px; padding:12px; max-height:52vh; overflow:auto; margin:0; }
+  .ag-kv { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; font-size:12px; }
+  .ag-kv > .k { color:var(--muted); }
+  #ag-modal { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:50; display:flex; align-items:flex-start;
+              justify-content:center; padding:5vh 16px; overflow:auto; }
+  #ag-modal .doos { background:var(--panel); border:1px solid var(--border); border-radius:14px; width:min(900px,100%); padding:20px; }
+  .ag-filters { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  .ag-filters select, .ag-filters input { font-size:12px; }
 </style>
 </head>
 <body>
@@ -203,6 +229,21 @@
     <div id="top5-list" style="margin-top:8px;"><span class="muted">Laden…</span></div>
   </div>
 
+  <div class="card" style="margin-bottom:18px;" id="agent-card">
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <b style="white-space:nowrap;">Agent-team</b>
+      <span id="agent-team-av" style="display:inline-flex; gap:2px;"></span>
+      <span id="agent-pill" class="muted" style="font-size:12px"></span>
+      <span style="flex:1"></span>
+      <button onclick="runAgents()" id="btn-agents2" style="opacity:.9;">▶ Nu een ronde draaien</button>
+      <button onclick="toonLogboek({})" title="Elke stap van elke agent: wat ze zagen, antwoordden en veranderden">📜 Logboek</button>
+      <button onclick="toonRondes()" title="Per ronde: welke objecten kregen een andere score">🔁 Rondes</button>
+      <button onclick="toonInstructies()" title="De letterlijke opdracht van elke agent en de grenzen die de code stelt">📋 Opdrachten</button>
+    </div>
+    <div id="agent-body" style="margin-top:12px;"><span class="muted">Laden…</span></div>
+    <div id="agent-log" style="display:none; margin-top:12px; border-top:1px solid var(--border); padding-top:12px;"></div>
+  </div>
+
   <div class="card" style="margin-bottom:18px;" id="bench-card">
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <b style="white-space:nowrap;">📊 Marktscorebord — €/m² verkocht per segment</b>
@@ -276,16 +317,18 @@ function aiChip(r) {
   if (!r.ai_splits && !r.ai_samenvatting) return "";
   const b = r.ai_bevinding || {};
   const kleur = { ja: "var(--accent)", nee: "var(--hot)", onzeker: "var(--warn)" }[r.ai_splits] || "var(--muted)";
-  const tekst = { ja: "🤖 splitsbaar", nee: "🤖 niet splitsbaar", onzeker: "🤖 onzeker" }[r.ai_splits] || "🤖 gelezen";
+  const tekst = { ja: "splitsbaar", nee: "niet splitsbaar", onzeker: "onzeker" }[r.ai_splits] || "gelezen";
   const tip = [r.ai_samenvatting,
                b.bewijs ? `Bewijs: "${b.bewijs}"` : "",
                (b.risicos || []).length ? "Risico: " + b.risicos.join("; ") : "",
                r.ai_punten != null ? `Score-effect: ${r.ai_punten > 0 ? "+" : ""}${r.ai_punten}` : ""]
               .filter(Boolean).join("\n").replace(/"/g, "&quot;");
-  const advies = { laten_lopen: '<span class="chip" style="color:var(--hot)">laten lopen</span>',
-                   uitzoeken: '<span class="chip" style="color:var(--warn)">eerst uitzoeken</span>',
-                   doorgaan: '<span class="chip" style="color:var(--accent)">doorgaan</span>' }[r.ai_advies] || "";
-  return `<span class="chip on" style="color:${kleur}" title="${tip}">${tekst}</span>${advies}`;
+  const adv = { laten_lopen: ["laten lopen", "var(--hot)"], uitzoeken: ["eerst uitzoeken", "var(--warn)"],
+                doorgaan: ["doorgaan", "var(--accent)"] }[r.ai_advies];
+  const advies = adv ? `<span class="chip" style="color:${adv[1]}; display:inline-flex; gap:4px; align-items:center;"
+      title="Advies van Kees (Criticus) — klik het object open voor zijn bezwaren">${avatar("criticus", 14)}${adv[0]}</span>` : "";
+  return `<span class="chip on" style="color:${kleur}; display:inline-flex; gap:4px; align-items:center;"
+      title="Lotte (Lezer):\n${tip}">${avatar("lezer", 14)}${tekst}</span>${advies}`;
 }
 
 function debounceLoad() { clearTimeout(t); t = setTimeout(load, 300); }
@@ -431,9 +474,537 @@ async function runAgents() {
   setTimeout(() => {
     if (btn) { btn.textContent = "🤖 Agents"; }
     loadAgentStatus();
+    loadAgentPanel();
   }, 3000);
   // Het team herscoort zelf; na een minuut is het resultaat zichtbaar.
   setTimeout(() => { loadCityStats().then(load); }, 60000);
+}
+
+// ── Het team: gezichten, namen, kleuren ────────────────────────
+// Elke agent is overal herkenbaar aan hetzelfde gezicht en dezelfde kleur,
+// zodat je in één oogopslag ziet wíe iets vond.
+const AGENTS = {
+  lezer: {
+    naam: "Lotte", rol: "Lezer", kleur: "#38bdf8",
+    doet: "leest de tekst van elk nieuw object",
+    werkwoord: { beoordeling: "las" },
+    svg: `<svg viewBox="0 0 40 40" aria-hidden="true">
+      <circle cx="20" cy="20" r="20" fill="#0c3347"/>
+      <path d="M7 40c1-8 6.5-12 13-12s12 4 13 12z" fill="#38bdf8"/>
+      <circle cx="20" cy="17.5" r="8" fill="#f1c7a3"/>
+      <path d="M11.3 18.5c-.6-7 3.6-11 8.7-11s9.3 4 8.7 11c-.8-3.6-3.3-5.6-8.7-5.6s-7.9 2-8.7 5.6z" fill="#7a4a2e"/>
+      <path d="M11.3 18.5c-.8 4-1 7 .2 9.5l1.6-.3c-.8-2.4-.9-5.3-.3-8.2z M28.7 18.5c.8 4 1 7-.2 9.5l-1.6-.3c.8-2.4.9-5.3.3-8.2z" fill="#7a4a2e"/>
+      <circle cx="16.8" cy="18" r="2.6" fill="#e9f6fd" fill-opacity=".35" stroke="#0c3347" stroke-width="1.2"/>
+      <circle cx="23.2" cy="18" r="2.6" fill="#e9f6fd" fill-opacity=".35" stroke="#0c3347" stroke-width="1.2"/>
+      <path d="M19.4 17.8h1.2" stroke="#0c3347" stroke-width="1.2"/>
+      <circle cx="16.8" cy="18.2" r=".85" fill="#0c3347"/><circle cx="23.2" cy="18.2" r=".85" fill="#0c3347"/>
+      <path d="M18.2 22q1.8 1.2 3.6 0" stroke="#9a5440" stroke-width="1" fill="none" stroke-linecap="round"/>
+      <g transform="rotate(10 29 31)"><rect x="24.5" y="25.5" width="9" height="11.5" rx="1.2" fill="#fff"/>
+      <path d="M26.3 28.6h5.4M26.3 30.8h5.4M26.3 33h3.6" stroke="#38bdf8" stroke-width="1" stroke-linecap="round"/></g>
+    </svg>`,
+  },
+  regelchecker: {
+    naam: "Rik", rol: "Regelchecker", kleur: "#f5b942",
+    doet: "zoekt per gemeente het splitsbeleid op",
+    werkwoord: { zoeken: "zocht het splitsbeleid op van", zonder_internet: "beoordeelde zonder internet het beleid van",
+                 beleid: "legde het splitsbeleid vast van" },
+    svg: `<svg viewBox="0 0 40 40" aria-hidden="true">
+      <circle cx="20" cy="20" r="20" fill="#3d2c0a"/>
+      <path d="M7 40c1-8 6.5-12 13-12s12 4 13 12z" fill="#f5b942"/>
+      <path d="M17.2 28.2 20 33l2.8-4.8z" fill="#fff"/><path d="M19.3 29.4h1.4l.5 5.6-1.2 1.4-1.2-1.4z" fill="#3d2c0a"/>
+      <circle cx="20" cy="17.5" r="8" fill="#d9a07a"/>
+      <path d="M12 16.2c0-5.5 3.6-8.6 8-8.6s8 3.1 8 8.6c-1.6-2.4-4.3-3.4-8-3.4s-6.4 1-8 3.4z" fill="#2b2118"/>
+      <rect x="13.6" y="16" width="5.2" height="3.8" rx=".8" fill="none" stroke="#3d2c0a" stroke-width="1.1"/>
+      <rect x="21.2" y="16" width="5.2" height="3.8" rx=".8" fill="none" stroke="#3d2c0a" stroke-width="1.1"/>
+      <path d="M18.8 17.6h2.4" stroke="#3d2c0a" stroke-width="1.1"/>
+      <circle cx="16.2" cy="18" r=".85" fill="#2b2118"/><circle cx="23.8" cy="18" r=".85" fill="#2b2118"/>
+      <path d="M17.6 22.4h4.8" stroke="#7d4a36" stroke-width="1.1" stroke-linecap="round"/>
+      <g transform="translate(26 26)" stroke="#fff" stroke-width="1.1" fill="none" stroke-linecap="round">
+        <path d="M5 0v8M1 2.5h8M2.2 8h5.6"/><path d="M1 2.5-.6 6h3.2zM9 2.5 7.4 6h3.2z" fill="#fff"/></g>
+    </svg>`,
+  },
+  criticus: {
+    naam: "Kees", rol: "Criticus", kleur: "#f0506e",
+    doet: "valt de topdeals aan en stelt de lastige vragen",
+    werkwoord: { kritiek: "bekritiseerde" },
+    svg: `<svg viewBox="0 0 40 40" aria-hidden="true">
+      <circle cx="20" cy="20" r="20" fill="#43121d"/>
+      <path d="M7 40c1-8 6.5-12 13-12s12 4 13 12z" fill="#f0506e"/>
+      <circle cx="20" cy="17.5" r="8" fill="#e8b48f"/>
+      <path d="M12.2 15.5c.6-5 3.8-7.8 7.8-7.8 4.6 0 7.8 3 7.8 7.2-1.7-1.6-3.2-3.8-7.2-3.8-3.3 0-6.1 1.8-8.4 4.4z" fill="#8a8f98"/>
+      <path d="M14.3 14.2l4-.9M21.9 14l3.7 1.4" stroke="#43121d" stroke-width="1.2" stroke-linecap="round"/>
+      <circle cx="16.4" cy="17.4" r=".95" fill="#43121d"/><circle cx="23.6" cy="17.8" r=".95" fill="#43121d"/>
+      <path d="M17.4 22.6q2.8-1.1 5.4.4" stroke="#8c4637" stroke-width="1.1" fill="none" stroke-linecap="round"/>
+      <path d="M16.5 20.4q3.5 1.1 7 0" stroke="#8a8f98" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <circle cx="29.5" cy="29.5" r="4.6" fill="#fff" fill-opacity=".25" stroke="#fff" stroke-width="1.6"/>
+      <path d="M26.2 32.8 22.8 36.4" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>`,
+  },
+};
+
+function avatar(agent, px = 28, bezig = false) {
+  const a = AGENTS[agent];
+  if (!a) return `<span class="av" style="width:${px}px;height:${px}px;background:var(--panel2)"></span>`;
+  return `<span class="av${bezig ? " bezig" : ""}" style="width:${px}px;height:${px}px;color:${a.kleur}"
+               title="${a.naam} · ${a.rol}">${a.svg}</span>`;
+}
+function wie(agent) {
+  const a = AGENTS[agent];
+  return a ? `<b style="color:${a.kleur}">${a.naam}</b> <span class="muted">· ${a.rol}</span>` : agent;
+}
+
+// ── Agent-paneel: zie je het team werken ───────────────────────
+let agentTimer = null;
+
+function sinds(iso) {
+  if (!iso) return "nog niet";
+  const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
+  const min = Math.round((Date.now() - d.getTime()) / 60000);
+  if (min < 1) return "net";
+  if (min < 60) return `${min} min geleden`;
+  const u = Math.round(min / 60);
+  if (u < 24) return `${u} uur geleden`;
+  return `${Math.round(u / 24)} dagen geleden`;
+}
+
+function verdelingHtml(v, kleuren) {
+  const e = Object.entries(v || {}).filter(([k]) => k && k !== "leeg" && k !== "geen");
+  if (!e.length) return '<span class="muted">nog niets</span>';
+  return e.map(([k, n]) =>
+    `<span style="color:${kleuren[k] || "var(--muted)"}">${k.replace(/_/g, " ")}: <b>${n}</b></span>`)
+    .join(' <span class="muted">·</span> ');
+}
+
+function agentKaart(a) {
+  const v = a.voortgang || {};
+  const bezig = a.bezig && v.totaal;
+  const pct = bezig ? Math.round(100 * v.gedaan / Math.max(1, v.totaal)) : 0;
+  const balk = bezig ? `
+    <div style="background:var(--panel2); border-radius:6px; height:6px; margin:8px 0 4px; overflow:hidden;">
+      <div style="width:${pct}%; height:100%; background:var(--accent);"></div></div>
+    <div style="font-size:11px; color:var(--accent)">${v.gedaan}/${v.totaal} · ${v.nu || "…"}</div>` : "";
+
+  let cijfers = "";
+  if (a.naam === "lezer") {
+    cijfers = `
+      <div><span class="muted">gelezen</span> <b>${a.gelezen_totaal}</b>
+           <span class="muted">van ${a.objecten_totaal} objecten</span></div>
+      <div><span class="muted">wachtrij</span> <b style="color:${a.wachtrij ? "var(--warn)" : "var(--accent)"}">${a.wachtrij}</b>
+           <span class="muted">· ${a.per_ronde} per ronde, vanaf ${a.vanaf_m2} m²</span></div>
+      <div style="margin-top:4px">${verdelingHtml(a.verdeling, { ja: "var(--accent)", nee: "var(--hot)", onzeker: "var(--warn)" })}</div>`;
+  } else if (a.naam === "regelchecker") {
+    const beleid = Object.entries(a.beleid || {});
+    cijfers = `
+      <div><span class="muted">gemeenten uitgezocht</span> <b>${a.gemeenten}</b>
+           ${a.gemeenten_verouderd ? `<span class="muted">· ${a.gemeenten_verouderd} verouderd</span>` : ""}</div>
+      <div style="margin-top:4px; font-size:12px;">${beleid.length ? beleid.map(([c, t]) =>
+        `<span title="${c}: splitsen ${t.replace(/_/g, " ")}" style="color:${
+          t === "nee" ? "var(--hot)" : t === "beperkt" ? "var(--warn)" : "var(--accent)"}">${c}</span>`).join(" · ")
+        : '<span class="muted">nog geen gemeente uitgezocht</span>'}</div>`;
+  } else {
+    cijfers = `
+      <div><span class="muted">top ${a.per_ronde} deals per ronde</span></div>
+      <div style="margin-top:4px">${verdelingHtml(a.verdeling, { doorgaan: "var(--accent)", uitzoeken: "var(--warn)", laten_lopen: "var(--hot)" })}</div>`;
+  }
+
+  const t = AGENTS[a.naam] || { naam: a.naam, rol: "", kleur: "var(--muted)" };
+  const staat = a.bezig ? `<span style="color:${t.kleur}">aan het werk</span>`
+              : a.laatst_actief ? `actief ${sinds(a.laatst_actief)}` : "nog niet actief";
+  return `<div class="card" style="background:var(--panel2); border-top:3px solid ${t.kleur};">
+    <div style="display:flex; gap:12px; align-items:center;">
+      ${avatar(a.naam, 48, a.bezig)}
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:15px;"><b style="color:${t.kleur}">${t.naam}</b> <span class="muted">· ${t.rol}</span></div>
+        <div class="muted" style="font-size:11px;">${staat}</div>
+      </div>
+      <button onclick="toonLogboek({agent:'${a.naam}'})" style="font-size:11px; padding:3px 8px;" title="Alles wat ${t.naam} deed">📜 werk</button>
+    </div>
+    <div class="muted" style="font-size:11px; margin:8px 0 8px;">${a.taak}</div>
+    ${balk}
+    <div style="font-size:12px; display:grid; gap:2px;">${cijfers}</div>
+    <div class="muted" style="font-size:11px; margin-top:8px;">
+      ${a.aanroepen_totaal} aanroepen · $${(a.usd_vandaag || 0).toFixed(3)} vandaag · $${(a.usd_totaal || 0).toFixed(2)} totaal
+      ${v.fouten ? ` · <span style="color:var(--hot)">${v.fouten} ${v.fouten === 1 ? "fout" : "fouten"}</span>` : ""}
+    </div>
+  </div>`;
+}
+
+async function loadAgentPanel() {
+  const body = document.getElementById("agent-body");
+  if (!body) return;
+  try {
+    const s = await (await fetch("/api/agents/overzicht")).json();
+    const b = s.budget || {};
+    const pct = Math.min(100, Math.round(100 * (b.vandaag_usd || 0) / Math.max(0.01, b.dag_usd)));
+    // "7,18" -> "7:30 en 18:30" (de rondes starten op half)
+    const uren = String(s.volgende_rondes || "").split(",").filter(Boolean)
+      .map(h => h.trim() + ":30").join(" en ");
+    document.getElementById("agent-pill").innerHTML = s.aan
+      ? `<span style="color:var(--accent)">aan</span> · rondes om ${uren}${s.ronde_bezig ? ' · <span style="color:var(--accent)">ronde loopt…</span>' : ""}`
+      : '<span style="color:var(--warn)">uit — zet ANTHROPIC_API_KEY in Railway</span>';
+    const knop = document.getElementById("btn-agents2");
+    if (knop) knop.disabled = !s.aan || s.ronde_bezig;
+
+    body.innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;">
+        ${(s.agents || []).map(agentKaart).join("")}
+      </div>
+      <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-top:12px; font-size:12px;">
+        <div style="min-width:200px; flex:1;">
+          <div class="muted" style="font-size:11px">dagbudget $${b.dag_usd} — $${(b.vandaag_usd || 0).toFixed(3)} gebruikt</div>
+          <div style="background:var(--panel2); border-radius:6px; height:6px; margin-top:4px; overflow:hidden;">
+            <div style="width:${pct}%; height:100%; background:${pct > 85 ? "var(--hot)" : "var(--accent2)"};"></div></div>
+        </div>
+        <span class="muted">laatste ronde: ${s.laatste_ronde
+          ? sinds(s.laatste_ronde.gestart) + " · " + s.laatste_ronde.gelezen + " gelezen, "
+            + s.laatste_ronde.bekritiseerd + " bekritiseerd"
+          : "nog niet gedraaid"}</span>
+      </div>`;
+
+    // Tijdens een ronde vaker verversen, zodat je het ziet lopen.
+    clearTimeout(agentTimer);
+    agentTimer = setTimeout(loadAgentPanel, s.ronde_bezig ? 5000 : 60000);
+    window._agentStatus = s;
+    const tav = document.getElementById("agent-team-av");
+    if (tav) tav.innerHTML = ["lezer", "regelchecker", "criticus"].map(n =>
+      avatar(n, 22, ((s.agents || []).find(a => a.naam === n) || {}).bezig)).join("");
+    // Logboek open tijdens een ronde? Dan zie je de regels binnenkomen.
+    if (s.ronde_bezig && agWeergave === "logboek") verversLogboek();
+  } catch (e) {
+    body.innerHTML = '<span class="muted">Overzicht niet op te halen.</span>';
+  }
+}
+
+// ── Logboek: elke stap herleidbaar ─────────────────────────────
+let agWeergave = "";          // "" | "logboek" | "rondes" | "instructies"
+let agFilter = {};
+let agOudste = null;          // voor "oudere regels laden"
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function agBlok(html) {
+  const el = document.getElementById("agent-log");
+  el.style.display = "block";
+  el.innerHTML = html;
+  el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function agSluit() {
+  agWeergave = "";
+  document.getElementById("agent-log").style.display = "none";
+}
+
+function effectHtml(e) {
+  if (!e || e.score_voor == null && e.score_na == null) return "";
+  const d = e.verschil ?? ((e.score_na || 0) - (e.score_voor || 0));
+  const kl = d > 0 ? "var(--accent)" : d < 0 ? "var(--hot)" : "var(--muted)";
+  return `<span class="ag-effect" title="score vóór → na deze ronde">score ${e.score_voor ?? "–"} → <b style="color:${kl}">${e.score_na ?? "–"}</b></span>`;
+}
+
+function actieRij(a) {
+  const t = AGENTS[a.agent] || { werkwoord: {}, naam: a.agent };
+  const ww = (t.werkwoord || {})[a.stap] || a.stap;
+  const kern = a.status === "fout" ? `<span style="color:var(--hot)">mislukt: ${esc(a.fout).slice(0, 140)}</span>`
+             : esc(typeof a.kern === "string" ? a.kern : JSON.stringify(a.kern)).slice(0, 220);
+  const plaats = a.stad && !String(a.onderwerp || "").toLowerCase().includes(a.stad) ? ` <span class="muted">(${esc(a.stad)})</span>` : "";
+  return `<div class="ag-item ${a.status === "fout" ? "fout" : ""}" onclick="toonActie(${a.id})">
+    ${avatar(a.agent, 28)}
+    <div>
+      <div class="ag-wie"><b style="color:${t.kleur || "inherit"}">${t.naam}</b> ${ww} <b>${esc(a.onderwerp || "–")}</b>${plaats}${effectHtml(a.effect)}</div>
+      <div class="ag-kern">${kern || '<span class="muted">—</span>'}</div>
+    </div>
+    <div class="ag-meta">${sinds(a.tijd)}<br>${(a.duur_ms / 1000).toFixed(1)}s · $${(a.usd || 0).toFixed(4)}${a.aantal_bronnen ? ` · ${a.aantal_bronnen} bronnen` : ""}</div>
+  </div>`;
+}
+
+async function toonLogboek(filter) {
+  agWeergave = "logboek";
+  agFilter = { ...filter };
+  agOudste = null;
+  const stadOpties = Object.keys(gemeenteRegels).sort();
+  agBlok(`
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <b>📜 Logboek</b>
+      <span class="muted" style="font-size:12px">klik een regel voor wat de agent zag, antwoordde, en wat de code ermee deed</span>
+      <span style="flex:1"></span><button onclick="agSluit()" style="font-size:12px">✕</button>
+    </div>
+    <div class="ag-filters">
+      <select id="agf-agent" onchange="agFilterZet()">
+        <option value="">Hele team</option>
+        ${Object.entries(AGENTS).map(([k, a]) => `<option value="${k}" ${agFilter.agent === k ? "selected" : ""}>${a.naam} · ${a.rol}</option>`).join("")}
+      </select>
+      <select id="agf-stad" onchange="agFilterZet()">
+        <option value="">Alle steden</option>
+        ${stadOpties.map(c => `<option ${agFilter.stad === c ? "selected" : ""}>${c}</option>`).join("")}
+      </select>
+      <label style="font-size:12px"><input type="checkbox" id="agf-fout" onchange="agFilterZet()" ${agFilter.status === "fout" ? "checked" : ""}> alleen fouten</label>
+      ${agFilter.ronde ? `<span class="chip on">ronde ${agFilter.ronde} <a href="#" onclick="agFilter.ronde=0; verversLogboek(); return false;">✕</a></span>` : ""}
+      ${agFilter.listing_id ? `<span class="chip on">object ${agFilter.listing_id} <a href="#" onclick="agFilter.listing_id=0; verversLogboek(); return false;">✕</a></span>` : ""}
+    </div>
+    <div id="ag-feed" class="ag-feed"><span class="muted">Laden…</span></div>
+    <div id="ag-meer" style="margin-top:8px"></div>`);
+  verversLogboek();
+}
+
+function agFilterZet() {
+  agFilter.agent = document.getElementById("agf-agent").value;
+  agFilter.stad = document.getElementById("agf-stad").value;
+  agFilter.status = document.getElementById("agf-fout").checked ? "fout" : "";
+  verversLogboek();
+}
+
+function agQuery(extra = {}) {
+  const f = { ...agFilter, ...extra };
+  const p = new URLSearchParams();
+  if (f.agent) p.set("agent", f.agent);
+  if (f.stad) p.set("stad", f.stad);
+  if (f.status) p.set("status", f.status);
+  if (f.ronde) p.set("ronde", f.ronde);
+  if (f.listing_id) p.set("listing_id", f.listing_id);
+  if (f.voor_id) p.set("voor_id", f.voor_id);
+  p.set("limit", 60);
+  return "/api/agents/logboek?" + p.toString();
+}
+
+async function verversLogboek(meer = false) {
+  const feed = document.getElementById("ag-feed");
+  if (!feed) return;
+  const rijen = await (await fetch(agQuery(meer && agOudste ? { voor_id: agOudste } : {}))).json();
+  if (!meer) feed.innerHTML = "";
+  if (!rijen.length && !meer) {
+    feed.innerHTML = `<div class="muted" style="padding:14px; font-size:13px;">Nog niets vastgelegd${
+      Object.values(agFilter).some(Boolean) ? " met deze filters" : " — het logboek vult zich zodra het team een ronde draait"}.</div>`;
+  }
+  feed.insertAdjacentHTML("beforeend", rijen.map(actieRij).join(""));
+  if (rijen.length) agOudste = rijen[rijen.length - 1].id;
+  document.getElementById("ag-meer").innerHTML = rijen.length === 60
+    ? `<button onclick="verversLogboek(true)" style="font-size:12px">Oudere regels laden</button>` : "";
+}
+
+// Detailvenster van één stap
+function kvHtml(obj) {
+  if (!obj || typeof obj !== "object") return `<pre class="ag-pre">${esc(obj)}</pre>`;
+  return `<div class="ag-kv">${Object.entries(obj).map(([k, v]) => {
+    let w;
+    if (Array.isArray(v)) {
+      w = v.length ? `<ul style="margin:0; padding-left:16px">${v.map(x =>
+        `<li>${typeof x === "object" ? Object.entries(x).map(([a, b]) => `<b>${esc(a)}</b>: ${esc(b)}`).join(" · ") : esc(x)}</li>`).join("")}</ul>` : '<span class="muted">—</span>';
+    } else if (v && typeof v === "object") {
+      w = kvHtml(v);
+    } else {
+      w = v === "" || v == null ? '<span class="muted">—</span>' : esc(v);
+    }
+    return `<div class="k">${esc(k.replace(/_/g, " "))}</div><div>${w}</div>`;
+  }).join("")}</div>`;
+}
+
+let agDetail = null;
+async function toonActie(id) {
+  const a = await (await fetch("/api/agents/logboek/" + id)).json();
+  if (a.error) { alert(a.error); return; }
+  agDetail = a;
+  const t = AGENTS[a.agent] || { naam: a.agent, rol: "", kleur: "var(--text)", werkwoord: {} };
+  const ww = (t.werkwoord || {})[a.stap] || a.stap;
+  let m = document.getElementById("ag-modal");
+  if (!m) {
+    m = document.createElement("div");
+    m.id = "ag-modal";
+    m.onclick = e => { if (e.target === m) m.remove(); };
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `<div class="doos">
+    <div style="display:flex; gap:14px; align-items:center;">
+      ${avatar(a.agent, 52)}
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:16px;"><b style="color:${t.kleur}">${t.naam}</b> ${ww} <b>${esc(a.onderwerp || "–")}</b></div>
+        <div class="muted" style="font-size:12px; margin-top:2px;">
+          ${new Date(a.tijd + "Z").toLocaleString("nl-NL")} · ${esc(a.model)} · ${(a.duur_ms / 1000).toFixed(1)}s ·
+          ${a.tok_in} in / ${a.tok_out} uit · $${(a.usd || 0).toFixed(4)}
+          ${a.ronde_id ? ` · <a href="#" onclick="document.getElementById('ag-modal').remove(); toonRonde(${a.ronde_id}); return false;">ronde ${a.ronde_id}</a>` : " · los gestart"}
+          · logregel #${a.id}
+        </div>
+      </div>
+      <button onclick="document.getElementById('ag-modal').remove()">✕</button>
+    </div>
+    ${a.status === "fout" ? `<div style="margin-top:12px; color:var(--hot); font-size:13px;"><b>Mislukt:</b> ${esc(a.fout)}</div>` : ""}
+    ${a.effect ? `<div style="margin-top:12px; font-size:13px;">Effect in deze ronde: ${effectHtml(a.effect)}
+       ${a.effect.splits_voor !== a.effect.splits_na ? ` <span class="ag-effect">splitsbaar ${esc(a.effect.splits_voor || "–")} → ${esc(a.effect.splits_na || "–")}</span>` : ""}
+       ${a.effect.advies_voor !== a.effect.advies_na ? ` <span class="ag-effect">advies ${esc((a.effect.advies_voor || "–").replace(/_/g, " "))} → ${esc((a.effect.advies_na || "–").replace(/_/g, " "))}</span>` : ""}</div>` : ""}
+    <div class="ag-tabs">
+      <button class="on" data-t="antwoord" onclick="agTab('antwoord')">💬 Wat ${t.naam} antwoordde</button>
+      <button data-t="toegepast" onclick="agTab('toegepast')">⚙️ Wat de code ermee deed</button>
+      <button data-t="invoer" onclick="agTab('invoer')">👁 Wat ${t.naam} te zien kreeg</button>
+      ${(a.bronnen || []).length ? `<button data-t="bronnen" onclick="agTab('bronnen')">🔗 Bronnen (${a.bronnen.length})</button>` : ""}
+      ${a.listing_id ? `<button onclick="document.getElementById('ag-modal').remove(); toonLogboek({listing_id:${a.listing_id}})">📜 Alle stappen voor dit object</button>` : ""}
+    </div>
+    <div id="ag-tabinhoud"></div>
+  </div>`;
+  agTab("antwoord");
+}
+
+function agTab(welk) {
+  const a = agDetail;
+  if (!a) return;
+  document.querySelectorAll("#ag-modal .ag-tabs button[data-t]").forEach(b => b.classList.toggle("on", b.dataset.t === welk));
+  const el = document.getElementById("ag-tabinhoud");
+  if (welk === "antwoord") {
+    el.innerHTML = typeof a.antwoord === "object" && a.antwoord
+      ? kvHtml(a.antwoord) : `<pre class="ag-pre">${esc(a.antwoord) || "(geen antwoord)"}</pre>`;
+  } else if (welk === "toegepast") {
+    el.innerHTML = a.toegepast
+      ? `<div class="muted" style="font-size:12px; margin-bottom:8px;">Het antwoord is een voorstel. De code begrenst het met vaste regels (zie 📋 Opdrachten); hier staat wat er daadwerkelijk is toegepast.</div>${kvHtml(a.toegepast)}`
+      : `<div class="muted" style="font-size:13px;">${a.stap === "zoeken" || a.stap === "zonder_internet"
+          ? "Dit was de zoekstap. Het verslag is in de volgende stap omgezet naar beleid; daar staat wat er is toegepast."
+          : "Voor deze stap is niets toegepast (bijvoorbeeld omdat hij mislukte)."}</div>`;
+  } else if (welk === "invoer") {
+    el.innerHTML = `<div class="muted" style="font-size:12px; margin-bottom:8px;">Letterlijk wat er naar het model ging, naast de vaste opdracht (📋 Opdrachten).</div>
+      <pre class="ag-pre">${esc(a.invoer)}</pre>`;
+  } else if (welk === "bronnen") {
+    el.innerHTML = `<ol style="font-size:13px; line-height:1.7; padding-left:20px;">${(a.bronnen || []).map(u =>
+      `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join("")}</ol>`;
+  }
+}
+
+// Rondes: wat veranderde er?
+async function toonRondes() {
+  agWeergave = "rondes";
+  const rondes = await (await fetch("/api/agents/rondes")).json();
+  const s = window._agentStatus || {};
+  agBlok(`
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <b>🔁 Rondes</b><span class="muted" style="font-size:12px">klik een ronde voor alle scorewijzigingen, met score vóór en na</span>
+      <span style="flex:1"></span><button onclick="agSluit()" style="font-size:12px">✕</button>
+    </div>
+    ${rondes.length ? `<table style="font-size:12px;"><thead><tr><th>#</th><th>gestart</th><th>door</th><th>status</th><th>wijzigingen</th><th>kosten</th><th></th></tr></thead><tbody>
+      ${rondes.map(r => `<tr style="cursor:pointer" onclick="toonRonde(${r.id})">
+        <td>${r.id}</td><td>${new Date(r.gestart + "Z").toLocaleString("nl-NL")}</td>
+        <td>${r.trigger === "knop" ? "▶ knop" : "⏰ schema"}</td>
+        <td style="color:${r.status === "ok" ? "var(--accent)" : r.status === "bezig" ? "var(--accent2)" : "var(--hot)"}">${r.status}</td>
+        <td><b>${r.aantal_wijzigingen}</b> objecten</td><td>$${(r.kosten_usd || 0).toFixed(3)}</td>
+        <td><a href="#" onclick="event.stopPropagation(); toonLogboek({ronde:${r.id}}); return false;">logboek →</a></td></tr>`).join("")}
+      </tbody></table>` : '<div class="muted" style="font-size:13px;">Nog geen ronde gedraaid.</div>'}
+    <div id="ag-kosten" style="margin-top:14px"></div>`);
+  const kosten = (s.kosten_per_dag || []).slice(0, 15);
+  if (kosten.length) document.getElementById("ag-kosten").innerHTML = `<b style="font-size:12px">Kosten per dag</b>
+    <table style="font-size:12px; margin-top:4px;"><thead><tr><th>dag</th><th>wie</th><th>aanroepen</th><th>kosten</th></tr></thead>
+    <tbody>${kosten.map(k => `<tr><td>${k.dag}</td><td>${avatar(k.agent, 18)} ${(AGENTS[k.agent] || {}).naam || k.agent}</td><td>${k.calls}</td><td>$${k.usd.toFixed(3)}</td></tr>`).join("")}</tbody></table>`;
+}
+
+async function toonRonde(id) {
+  agWeergave = "rondes";
+  const r = await (await fetch("/api/agents/rondes/" + id)).json();
+  if (r.error) { alert(r.error); return; }
+  const rp = r.rapport || {};
+  const pa = r.per_agent || {};
+  const wz = r.wijzigingen || [];
+  const fouten = [];
+  ["lezer", "regelchecker", "criticus"].forEach(n => {
+    const d = rp[n] || {};
+    (d.foutmeldingen || []).forEach(f => fouten.push([n, f.fout || JSON.stringify(f)]));
+    if (d.fout) fouten.push([n, d.fout]);
+  });
+  agBlok(`
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <a href="#" onclick="toonRondes(); return false;" style="font-size:12px">← rondes</a>
+      <b>Ronde ${r.id}</b>
+      <span class="muted" style="font-size:12px">${new Date(r.gestart + "Z").toLocaleString("nl-NL")} · ${r.trigger === "knop" ? "gestart met de knop" : "volgens schema"} · $${(r.kosten_usd || 0).toFixed(3)}</span>
+      <span style="flex:1"></span><button onclick="toonLogboek({ronde:${r.id}})" style="font-size:12px">📜 logboek van deze ronde</button>
+      <button onclick="agSluit()" style="font-size:12px">✕</button>
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+      ${["lezer", "regelchecker", "criticus"].map(n => {
+        const t = AGENTS[n], p = pa[n] || { aanroepen: 0, fouten: 0 };
+        const wat = n === "lezer" ? `${(rp.lezer || {}).gelezen ?? 0} objecten gelezen`
+                  : n === "regelchecker" ? `${(rp.regelchecker || {}).gecheckt ?? 0} gemeenten`
+                  : `${(rp.criticus || {}).beoordeeld ?? 0} deals bekritiseerd`;
+        return `<div style="display:flex; gap:8px; align-items:center; background:var(--panel2); border-radius:10px; padding:8px 12px;">
+          ${avatar(n, 30)}<div style="font-size:12px;"><b style="color:${t.kleur}">${t.naam}</b><br>
+          <span class="muted">${wat} · ${p.aanroepen} aanroepen${p.fouten ? ` · <span style="color:var(--hot)">${p.fouten} fout</span>` : ""}</span></div></div>`;
+      }).join("")}
+    </div>
+    ${fouten.length ? `<div style="font-size:12px; margin-bottom:12px;"><b style="color:var(--hot)">Fouten</b>
+      <ul style="margin:4px 0 0 18px">${fouten.map(([n, f]) => `<li>${(AGENTS[n] || {}).naam || n}: ${esc(f)}</li>`).join("")}</ul></div>` : ""}
+    <b style="font-size:13px">Wat het team veranderde</b> <span class="muted" style="font-size:12px">— ${wz.length} objecten, grootste verschuiving eerst. Scores die alleen door herberekening (nieuwe marktdata) verschoven staan hier niet: dat is niet het werk van het team.</span>
+    ${wz.length ? `<table style="font-size:12px; margin-top:6px;"><thead><tr><th>door</th><th>object</th><th>stad</th><th>score</th><th>splitsbaar</th><th>advies Kees</th><th></th></tr></thead><tbody>
+      ${wz.map(w => `<tr>
+        <td style="white-space:nowrap">${oorzaakHtml(w.oorzaak)}</td>
+        <td>${esc(w.adres)}</td><td>${esc(w.stad)}</td>
+        <td>${w.score_voor ?? "–"} → <b style="color:${w.verschil > 0 ? "var(--accent)" : w.verschil < 0 ? "var(--hot)" : "inherit"}">${w.score_na}</b>
+            <span class="muted">(${w.verschil > 0 ? "+" : ""}${w.verschil})</span></td>
+        <td>${w.splits_voor === w.splits_na ? esc(w.splits_na || "–") : `${esc(w.splits_voor || "–")} → <b>${esc(w.splits_na || "–")}</b>`}</td>
+        <td>${w.advies_voor === w.advies_na ? esc((w.advies_na || "–").replace(/_/g, " ")) : `${esc((w.advies_voor || "–").replace(/_/g, " "))} → <b>${esc((w.advies_na || "–").replace(/_/g, " "))}</b>`}</td>
+        <td><a href="#" onclick="${w.oorzaak === "rik"
+            ? `toonLogboek({agent:'regelchecker', stad:'${esc((w.stad || "").toLowerCase())}', ronde:${r.id}})`
+            : `toonLogboek({listing_id:${w.listing_id}, ronde:${r.id}})`}; return false;">waarom →</a></td></tr>`).join("")}
+      </tbody></table>` : '<div class="muted" style="font-size:12px; margin-top:6px;">Geen scores veranderd in deze ronde.</div>'}`);
+}
+
+function oorzaakHtml(o) {
+  const map = { lotte: "lezer", kees: "criticus", rik: "regelchecker" };
+  return String(o || "").split("+").filter(Boolean)
+    .map(x => avatar(map[x], 20)).join("") || '<span class="muted">–</span>';
+}
+
+// Opdrachten: geen geheime prompts
+async function toonInstructies() {
+  agWeergave = "instructies";
+  const d = await (await fetch("/api/agents/instructies")).json();
+  agBlok(`
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <b>📋 Opdrachten</b><span class="muted" style="font-size:12px">letterlijk wat elke agent als opdracht krijgt, en de grenzen die de code aan het antwoord stelt</span>
+      <span style="flex:1"></span><button onclick="agSluit()" style="font-size:12px">✕</button>
+    </div>
+    <div style="display:grid; gap:14px;">
+    ${["lezer", "regelchecker", "criticus"].map(n => {
+      const t = AGENTS[n], x = d[n] || {};
+      return `<div style="border:1px solid var(--border); border-radius:10px; padding:14px;">
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">${avatar(n, 40)}
+          <div><b style="color:${t.kleur}">${t.naam}</b> <span class="muted">· ${t.rol} · ${esc(x.model)}</span><br>
+          <span class="muted" style="font-size:12px">${t.doet}</span></div></div>
+        <div style="font-size:12px; margin-bottom:6px;"><b>Grenzen die de code afdwingt</b></div>
+        <ul style="font-size:12px; margin:0 0 10px 18px;">${(x.grenzen || []).map(g => `<li>${esc(g)}</li>`).join("")}</ul>
+        <details><summary style="cursor:pointer; font-size:12px;">Volledige opdracht</summary>
+          <pre class="ag-pre" style="margin-top:8px">${esc(x.instructie)}${x.omzetten ? "\n\n— Tweede stap (omzetten naar beleid) —\n" + esc(x.omzetten) : ""}</pre></details>
+        <details><summary style="cursor:pointer; font-size:12px; margin-top:6px;">Verplicht antwoordformaat</summary>
+          <pre class="ag-pre" style="margin-top:8px">${esc(JSON.stringify(x.antwoordformaat, null, 2))}</pre></details>
+      </div>`;
+    }).join("")}
+    </div>`);
+}
+
+function toggleAgentLog() {
+  const el = document.getElementById("agent-log");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+  if (el.style.display === "block") renderAgentLog(window._agentStatus);
+}
+
+function renderAgentLog(s) {
+  const el = document.getElementById("agent-log");
+  if (!s) { el.innerHTML = '<span class="muted">Nog geen ronde gedraaid.</span>'; return; }
+  const r = s.laatste_rapport;
+  const kosten = (s.kosten_per_dag || []).slice(0, 12);
+  const fouten = [];
+  ["lezer", "regelchecker", "criticus"].forEach(naam => {
+    const deel = r && r[naam];
+    if (deel && deel.foutmeldingen) deel.foutmeldingen.forEach(f =>
+      fouten.push(`${naam}: ${f.fout || JSON.stringify(f)}`));
+    if (deel && deel.fout) fouten.push(`${naam}: ${deel.fout}`);
+  });
+  el.innerHTML = `
+    <div style="font-size:12px; display:grid; gap:10px;">
+      <div><b>Laatste ronde</b> ${s.ronde_gestart ? `<span class="muted">gestart ${sinds(s.ronde_gestart)}</span>` : ""}
+        <div style="margin-top:4px">${r ? `
+          Lezer: ${(r.lezer || {}).gelezen ?? 0} gelezen${(r.lezer || {}).overgeslagen ? `, ${r.lezer.overgeslagen} doorgeschoven (budget)` : ""} ·
+          Regelchecker: ${(r.regelchecker || {}).gecheckt ?? 0} gemeenten ·
+          Criticus: ${(r.criticus || {}).beoordeeld ?? 0} deals ·
+          herscoord: ${r._herscoord ?? 0} objecten ·
+          kosten: $${((r.kosten || {}).deze_ronde_usd ?? 0).toFixed ? (r.kosten.deze_ronde_usd).toFixed(3) : (r.kosten || {}).deze_ronde_usd}`
+        : '<span class="muted">nog geen ronde in deze sessie — de cijfers hierboven komen uit de database</span>'}</div></div>
+      ${fouten.length ? `<div><b style="color:var(--hot)">Fouten</b><ul style="margin:4px 0 0 18px">${
+        fouten.map(f => `<li>${f}</li>`).join("")}</ul></div>` : ""}
+      ${kosten.length ? `<div><b>Kosten per dag</b>
+        <table style="font-size:12px; margin-top:4px;"><thead><tr><th>dag</th><th>agent</th><th>aanroepen</th><th>kosten</th></tr></thead>
+        <tbody>${kosten.map(k => `<tr><td>${k.dag}</td><td>${k.agent}</td><td>${k.calls}</td><td>$${k.usd.toFixed(3)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    </div>`;
 }
 
 // Volledig verslag van het agent-team onder een object.
@@ -447,7 +1018,7 @@ function aiBlok(r) {
   const ernstKleur = { hoog: "var(--hot)", midden: "var(--warn)", laag: "var(--muted)" };
 
   const lezer = r.ai_checked ? `
-    <b>Lezer</b> <span class="muted">— wat er in de tekst staat</span>
+    <div style="display:flex; gap:8px; align-items:center;">${avatar("lezer", 26)}<span>${wie("lezer")} <span class="muted">— wat er in de tekst staat</span></span></div>
     <table style="font-size:12px; margin:6px 0 12px;">
       ${rij("oordeel", r.ai_splits ? `splitsbaar: <b>${r.ai_splits}</b>${r.ai_units ? ` · ${r.ai_units} app.` : ""}` : "")}
       ${rij("bewijs", b.bewijs ? `<i>"${b.bewijs}"</i>` : "")}
@@ -460,7 +1031,7 @@ function aiBlok(r) {
     </table>` : "";
 
   const gem = g ? `
-    <b>Regelchecker</b> <span class="muted">— splitsbeleid ${r.city}</span>
+    <div style="display:flex; gap:8px; align-items:center;">${avatar("regelchecker", 26)}<span>${wie("regelchecker")} <span class="muted">— splitsbeleid ${r.city}</span></span></div>
     <table style="font-size:12px; margin:6px 0 12px;">
       ${rij("beleid", `<b>${(g.toegestaan || "").replace(/_/g, " ")}</b>${g.vergunning_nodig ? " · vergunning nodig" : ""}`)}
       ${rij("min. woning", g.min_woning_m2 ? g.min_woning_m2 + " m²" : "")}
@@ -472,7 +1043,7 @@ function aiBlok(r) {
     </table>` : "";
 
   const krit = c ? `
-    <b>Criticus</b> <span class="muted">— bezwaren tegen deze deal</span>
+    <div style="display:flex; gap:8px; align-items:center;">${avatar("criticus", 26)}<span>${wie("criticus")} <span class="muted">— bezwaren tegen deze deal</span></span></div>
     <div style="margin:6px 0 12px; font-size:12px;">
       ${(c.rode_vlaggen || []).map(v =>
         `<div style="margin-bottom:3px"><span style="color:${ernstKleur[v.ernst] || "var(--muted)"}">●</span>
@@ -484,10 +1055,12 @@ function aiBlok(r) {
     </div>` : "";
 
   return `<div style="border:1px solid var(--border); border-radius:10px; padding:14px; margin-top:4px;">
-    <div style="margin-bottom:8px"><b>🤖 Agent-team</b>
-      <span class="muted" style="font-size:11px">— leest tekst en beleid; de bedragen komen uit het rekenmodel</span></div>
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;"><b>Agent-team</b>
+      <span class="muted" style="font-size:11px">leest tekst en beleid; de bedragen komen uit het rekenmodel</span>
+      <span style="flex:1"></span>
+      <button onclick="toonLogboek({listing_id:${r.id}})" style="font-size:11px; padding:3px 8px;">📜 volledig spoor van dit object</button></div>
     ${lezer}${gem}${krit}
-    ${!c ? '<div class="muted" style="font-size:11px">De Criticus beoordeelt alleen de topdeals.</div>' : ""}
+    ${!c ? '<div class="muted" style="font-size:11px">Kees (Criticus) beoordeelt alleen de topdeals.</div>' : ""}
   </div>`;
 }
 
@@ -983,6 +1556,7 @@ checkRunning();
 setInterval(checkRunning, 10000);
 loadAgentStatus();
 setInterval(loadAgentStatus, 120000);
+loadAgentPanel();
 </script>
 </body>
 </html>

@@ -41,9 +41,107 @@ _client = None
 # Wat dit proces heeft verbruikt sinds de start (los van de dagteller in de DB).
 VERBRUIK = {"calls": 0, "in": 0, "out": 0, "usd": 0.0, "fouten": 0, "laatste": None}
 
+# Live voortgang per agent, zodat je in het dashboard kunt MEEKIJKEN terwijl
+# een ronde loopt. Zonder dit weet je alleen achteraf dat er iets gebeurd is.
+PROGRESS: dict = {}
+
+
+def begin(agent: str, totaal: int = 0, wat: str = "") -> None:
+    with _lock:
+        PROGRESS[agent] = {"bezig": True, "gedaan": 0, "totaal": totaal,
+                           "nu": wat, "fouten": 0, "klaar": None,
+                           "gestart": dt.datetime.utcnow().isoformat(timespec="seconds")}
+
+
+def stap(agent: str, nu: str = "", fout: bool = False) -> None:
+    with _lock:
+        p = PROGRESS.get(agent)
+        if not p:
+            return
+        p["gedaan"] += 1
+        if nu:
+            p["nu"] = nu
+        if fout:
+            p["fouten"] += 1
+
+
+def klaar(agent: str, samenvatting: str = "") -> None:
+    with _lock:
+        p = PROGRESS.get(agent)
+        if not p:
+            return
+        p["bezig"] = False
+        p["nu"] = ""
+        p["klaar"] = dt.datetime.utcnow().isoformat(timespec="seconds")
+        p["samenvatting"] = samenvatting
+
 
 class AgentUit(RuntimeError):
     """Geen API-key, of het dagbudget is op."""
+
+
+# ── Context voor het logboek ─────────────────────────────────────
+# Welke ronde loopt er, en over welk object/gemeente gaat de aanroep? Dat
+# wordt per thread bijgehouden zodat vraag_json/onderzoek het zelf kunnen
+# vastleggen, zonder dat elke agent de administratie hoeft te doen.
+_ctx = threading.local()
+
+
+def context() -> dict:
+    return dict(getattr(_ctx, "d", None) or {})
+
+
+class onderwerp:
+    """with onderwerp(listing_id=12, stad='rotterdam', onderwerp='Herenstraat 1'): ..."""
+
+    def __init__(self, **kw):
+        self.kw = kw
+        self.oud: dict = {}
+
+    def __enter__(self):
+        self.oud = context()
+        _ctx.d = {**self.oud, **self.kw}
+        return self
+
+    def __exit__(self, *exc):
+        _ctx.d = self.oud
+        return False
+
+
+def laatste_actie() -> int:
+    """Id van de logregel van de laatste modelaanroep in deze thread."""
+    return int(context().get("_laatste_actie") or 0)
+
+
+def _zet_laatste(actie_id: int) -> None:
+    d = context()
+    d["_laatste_actie"] = actie_id
+    _ctx.d = d
+
+
+def noteer_toegepast(wat: dict) -> None:
+    """Legt vast wat de CODE met het antwoord deed (begrenzen, overrulen).
+    Juist dat verschil tussen voorstel en toepassing moet zichtbaar zijn."""
+    from ..db import actie_update
+    actie_update(laatste_actie(), toegepast=wat)
+
+
+def _log(agent: str, stap: str, model: str, invoer: str, *, antwoord=None,
+         bronnen=None, usage=None, duur_ms: int = 0, fout: str = "") -> int:
+    from ..db import actie_log
+    c = context()
+    tok_in = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+    tok_out = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+    actie_id = actie_log(
+        agent=agent, stap=stap, model=model,
+        ronde_id=c.get("ronde_id"), listing_id=c.get("listing_id"),
+        stad=(c.get("stad") or "")[:100], onderwerp=(c.get("onderwerp") or "")[:300],
+        status="fout" if fout else "ok", fout=fout[:2000],
+        invoer=invoer, antwoord=antwoord if antwoord is not None else "",
+        bronnen=bronnen or [], tok_in=tok_in, tok_out=tok_out,
+        usd=_kosten(model, tok_in, tok_out), duur_ms=duur_ms)
+    _zet_laatste(actie_id)
+    return actie_id
 
 
 def agents_enabled() -> bool:
@@ -112,18 +210,30 @@ def vraag_json(*, agent: str, model: str, system: str, prompt: str,
     if budget_over() <= 0:
         raise AgentUit(f"dagbudget ${dagbudget():.2f} verbruikt")
 
+    import time
     tool = {"name": naam, "description": f"Lever het resultaat van {agent}.",
             "input_schema": schema}
-    r = _client_get().messages.create(
-        model=model, max_tokens=max_tokens, temperature=0,
-        system=system, tools=[tool],
-        tool_choice={"type": "tool", "name": naam},
-        messages=[{"role": "user", "content": prompt}],
-    )
+    t0 = time.monotonic()
+    try:
+        r = _client_get().messages.create(
+            model=model, max_tokens=max_tokens, temperature=0,
+            system=system, tools=[tool],
+            tool_choice={"type": "tool", "name": naam},
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as e:
+        _log(agent, naam, model, prompt, fout=f"{type(e).__name__}: {e}",
+             duur_ms=int((time.monotonic() - t0) * 1000))
+        raise
     _boek(model, r.usage, agent)
+    duur = int((time.monotonic() - t0) * 1000)
     for b in r.content:
         if getattr(b, "type", "") == "tool_use" and b.name == naam:
-            return dict(b.input)
+            data = dict(b.input)
+            _log(agent, naam, model, prompt, antwoord=data, usage=r.usage, duur_ms=duur)
+            return data
+    _log(agent, naam, model, prompt, antwoord=_blokken_tekst(r.content),
+         usage=r.usage, duur_ms=duur, fout="geen gestructureerd antwoord")
     raise RuntimeError(f"{agent}: geen structureel antwoord ontvangen")
 
 
@@ -141,8 +251,11 @@ def onderzoek(*, agent: str, model: str, system: str, prompt: str,
     if budget_over() <= 0:
         raise AgentUit(f"dagbudget ${dagbudget():.2f} verbruikt")
 
+    import time
     web = [{"type": "web_search_20250305", "name": "web_search",
             "max_uses": max_uses}]
+    t0 = time.monotonic()
+    stap = "zoeken"
     try:
         r = _client_get().messages.create(
             model=model, max_tokens=max_tokens, temperature=0,
@@ -152,22 +265,43 @@ def onderzoek(*, agent: str, model: str, system: str, prompt: str,
     except Exception as e:
         print(f"[agents] {agent}: zoeken lukte niet ({str(e)[:120]}) — "
               f"val terug op eigen kennis", flush=True)
-        r = _client_get().messages.create(
-            model=model, max_tokens=max_tokens, temperature=0,
-            system=system + "\n\nJe hebt GEEN internet. Zeg expliciet wat je "
-                            "niet kunt verifiëren en houd de zekerheid laag.",
-            messages=[{"role": "user", "content": prompt}],
-        )
+        _log(agent, "zoeken", model, prompt, fout=f"zoeken mislukt: {e}",
+             duur_ms=int((time.monotonic() - t0) * 1000))
+        stap = "zonder_internet"
+        t0 = time.monotonic()
+        try:
+            r = _client_get().messages.create(
+                model=model, max_tokens=max_tokens, temperature=0,
+                system=system + "\n\nJe hebt GEEN internet. Zeg expliciet wat je "
+                                "niet kunt verifiëren en houd de zekerheid laag.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as e2:
+            _log(agent, stap, model, prompt, fout=f"{type(e2).__name__}: {e2}",
+                 duur_ms=int((time.monotonic() - t0) * 1000))
+            raise
     _boek(model, r.usage, agent)
 
     bronnen: list[str] = []
+    zoekvragen: list[str] = []
     for b in r.content:
-        if getattr(b, "type", "") == "web_search_tool_result":
+        t = getattr(b, "type", "")
+        if t == "server_tool_use":
+            q = (getattr(b, "input", None) or {}).get("query")
+            if q:
+                zoekvragen.append(q)
+        if t == "web_search_tool_result":
             for res in (getattr(b, "content", None) or []):
                 u = getattr(res, "url", None)
                 if u and u not in bronnen:
                     bronnen.append(u)
-    return _blokken_tekst(r.content), bronnen
+    verslag = _blokken_tekst(r.content)
+    # De zoekvragen horen bij het spoor: je ziet waarop hij gezocht heeft.
+    invoer = prompt + ("\n\n[ZOEKVRAGEN VAN DE AGENT]\n- " + "\n- ".join(zoekvragen)
+                       if zoekvragen else "")
+    _log(agent, stap, model, invoer, antwoord=verslag, bronnen=bronnen,
+         usage=r.usage, duur_ms=int((time.monotonic() - t0) * 1000))
+    return verslag, bronnen
 
 
 def status() -> dict:

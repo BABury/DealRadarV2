@@ -104,9 +104,23 @@ def _punten(oordeel: dict) -> int:
 
 def sla_op(listing_id: int, oordeel: dict) -> dict:
     """Schrijft het oordeel bij het object. Score volgt uit compute_scores()."""
+    from . import noteer_toegepast
     from ..db import Listing, SessionLocal
     punten = _punten(oordeel)
     units = int(oordeel.get("max_appartementen") or 0)
+    voorgesteld = int(oordeel.get("punten") or 0)
+    noteer_toegepast({
+        "punten_voorgesteld": voorgesteld,
+        "punten_toegepast": punten,
+        "reden_aanpassing": (
+            "" if voorgesteld == punten else
+            "huurbeding = altijd −20" if oordeel.get("verhuurd") == "huurbeding" else
+            "verhuurd = hooguit −8" if oordeel.get("verhuurd") == "verhuurd" else
+            "al gesplitst = hooguit −5" if oordeel.get("al_gesplitst") else
+            "begrensd op −20..+20"),
+        "splitsbaar": oordeel.get("splitsbaar"),
+        "appartementen": units or None,
+    })
     with SessionLocal() as s:
         row = s.get(Listing, listing_id)
         if not row:
@@ -127,8 +141,11 @@ def lees_batch(listing_ids: list[int], max_objecten: int | None = None) -> dict:
     een grote achterstand over meerdere runs wordt weggewerkt."""
     from ..db import Listing, SessionLocal
 
+    from . import begin, klaar, onderwerp, stap
+
     gedaan, fouten, overgeslagen = [], [], 0
     ids = listing_ids[:max_objecten] if max_objecten else listing_ids
+    begin("lezer", len(ids))
     for lid in ids:
         if budget_over() <= 0:
             overgeslagen = len(ids) - len(gedaan) - len(fouten)
@@ -141,13 +158,18 @@ def lees_batch(listing_ids: list[int], max_objecten: int | None = None) -> dict:
         if not d:
             continue
         try:
-            gedaan.append(sla_op(lid, beoordeel(d)))
+            with onderwerp(listing_id=lid, stad=(d.get("city") or "").lower(),
+                           onderwerp=d.get("address") or f"object {lid}"):
+                gedaan.append(sla_op(lid, beoordeel(d)))
+            stap("lezer", f"{d.get('address') or lid} ({d.get('city') or ''})")
         except Exception as e:
             fouten.append({"id": lid, "fout": str(e)[:160]})
+            stap("lezer", fout=True)
             # Een kapotte tekst of time-out mag de rest niet tegenhouden,
             # maar bij een structurele fout (key ongeldig) stoppen we wel.
             if "api_key" in str(e).lower() or "authentication" in str(e).lower():
                 break
+    klaar("lezer", f"{len(gedaan)} gelezen, {len(fouten)} fouten")
     return {"gelezen": len(gedaan), "fouten": len(fouten),
             "overgeslagen": overgeslagen, "details": gedaan[:50],
             "foutmeldingen": fouten[:5]}

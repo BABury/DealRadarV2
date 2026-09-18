@@ -124,9 +124,9 @@ def _deal_text(o: dict) -> tuple[str, str, str]:
     # Wat het agent-team ervan vond (leeg zolang er geen ANTHROPIC_API_KEY is)
     ag = _agent_oordeel(o.get("id") or 0)
     if ag.get("samenvatting"):
-        regels.append(f"🤖 {ag['samenvatting']}")
+        regels.append(f"📖 Lotte (Lezer): {ag['samenvatting']}")
     if ag.get("advies") == "uitzoeken":
-        regels.append("🤖 Criticus: eerst uitzoeken — zie dashboard voor de vragen")
+        regels.append("🔍 Kees (Criticus): eerst uitzoeken — zijn vragen staan in het dashboard")
     url = o.get("url") or ""
     if url:
         regels.append(url)
@@ -251,6 +251,25 @@ def send_daily_status(report: dict) -> bool:
         regels.append(f"\n🏗 Grote projecten: {dp['beoordeeld']} (zie dashboard, cijfers indicatief)")
     except Exception as e:
         regels.append(f"(ranglijst niet beschikbaar: {str(e)[:60]})")
+    # Agent-team: draait het, blijft het bij, en wat kost het?
+    try:
+        from .agents import agents_enabled, dagbudget
+        if agents_enabled():
+            from .agents.team import wachtrij
+            from .db import agent_kosten_vandaag, agent_werk_overzicht
+            w = agent_werk_overzicht()
+            adv = w["advies_verdeling"]
+            regels.append(
+                f"\n👥 Team: Lotte las {w['gelezen']} objecten"
+                f"{f', {wachtrij()} in de wachtrij' if wachtrij() else ' (wachtrij leeg)'}"
+                f" · Rik zocht {w['gemeenten']} gemeenten uit"
+                f" · ${agent_kosten_vandaag():.2f} van ${dagbudget():.2f} vandaag")
+            if adv:
+                regels.append("   Kees: " + ", ".join(
+                    f"{k.replace('_', ' ')} {n}" for k, n in adv.items()))
+    except Exception as e:
+        regels.append(f"(agent-overzicht niet beschikbaar: {str(e)[:60]})")
+
     if fout and len(fout) == sum(1 for b in report if not b.startswith("_")):
         regels.insert(1, "❌ ALLE bronnen faalden — kijk in Railway naar de logs.")
     return send_telegram("\n".join(regels))

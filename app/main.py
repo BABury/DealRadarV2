@@ -69,7 +69,8 @@ _agent_lock = threading.Lock()
 _agent_state = {"running": False, "started": None, "last_report": None}
 
 
-def _run_agents(max_lezen: int | None = None, top_n: int | None = None) -> dict:
+def _run_agents(max_lezen: int | None = None, top_n: int | None = None,
+                trigger: str = "schema") -> dict:
     """Agent-team: leest advertenties, checkt gemeentebeleid, bekritiseert de
     topdeals. Eigen lock (mag prima naast een scrape lopen — het is netwerk-
     wachten, geen browserwerk) maar nooit twee rondes tegelijk."""
@@ -80,7 +81,7 @@ def _run_agents(max_lezen: int | None = None, top_n: int | None = None) -> dict:
     _agent_state["started"] = dt.datetime.utcnow().isoformat()
     try:
         from .agents.team import run_team
-        report = run_team(max_lezen=max_lezen, top_n=top_n)
+        report = run_team(max_lezen=max_lezen, top_n=top_n, trigger=trigger)
         _agent_state["last_report"] = report
         return report
     except Exception as e:
@@ -472,6 +473,146 @@ def agents_status():
             "uren": os.getenv("AGENT_HOURS", "7,18")}
 
 
+@app.get("/api/agents/overzicht")
+def agents_overzicht():
+    """Eén overzicht: wat elke agent doet, deed, vond en kostte.
+    Dit is het paneel in het dashboard — geen modelaanroepen, alleen tellen."""
+    import datetime as dt
+
+    from .agents import PROGRESS, agents_enabled, dagbudget
+    from .agents.team import MAX_LEZEN, MAX_STEDEN, MIN_M2, TOP_N, wachtrij
+    from .db import agent_kosten_overzicht, agent_kosten_vandaag, agent_werk_overzicht
+
+    werk = agent_werk_overzicht()
+    per_agent = werk["per_agent"]
+    vandaag = agent_kosten_vandaag()
+    kosten = agent_kosten_overzicht(7)
+    vandaag_str = dt.date.today().isoformat()
+    per_dag_agent: dict = {}
+    for k in kosten:
+        per_dag_agent.setdefault(k["agent"], {})[k["dag"]] = k["usd"]
+
+    def rij(naam: str, taak: str, extra: dict) -> dict:
+        p = PROGRESS.get(naam) or {}
+        a = per_agent.get(naam, {})
+        return {"naam": naam, "taak": taak,
+                "bezig": bool(p.get("bezig")),
+                "voortgang": {"gedaan": p.get("gedaan", 0), "totaal": p.get("totaal", 0),
+                              "nu": p.get("nu", ""), "fouten": p.get("fouten", 0)},
+                "laatste_ronde": p.get("klaar"),
+                "laatste_ronde_resultaat": p.get("samenvatting", ""),
+                "laatst_actief": a.get("laatste"),
+                "aanroepen_totaal": a.get("calls_totaal", 0),
+                "usd_totaal": a.get("usd_totaal", 0),
+                "usd_vandaag": (per_dag_agent.get(naam, {}) or {}).get(vandaag_str, 0),
+                **extra}
+
+    return {
+        "aan": agents_enabled(),
+        "ronde_bezig": _agent_state["running"],
+        "ronde_gestart": _agent_state["started"],
+        "volgende_rondes": os.getenv("AGENT_HOURS", "7,18"),
+        "budget": {"dag_usd": dagbudget(), "vandaag_usd": round(vandaag, 4),
+                   "over_usd": round(max(0.0, dagbudget() - vandaag), 4)},
+        "agents": [
+            rij("lezer", "leest de advertentietekst van elk nieuw object",
+                {"gelezen_totaal": werk["gelezen"],
+                 "objecten_totaal": werk["objecten_totaal"],
+                 "wachtrij": wachtrij(), "per_ronde": MAX_LEZEN,
+                 "vanaf_m2": MIN_M2, "verdeling": werk["splits_verdeling"],
+                 "laatst_gelezen": werk["laatst_gelezen"]}),
+            rij("regelchecker", "zoekt per gemeente het splitsbeleid op",
+                {"gemeenten": werk["gemeenten"],
+                 "gemeenten_verouderd": werk["gemeenten_verouderd"],
+                 "per_ronde": MAX_STEDEN, "beleid": werk["gemeenten_beleid"]}),
+            rij("criticus", "valt de topdeals aan en levert de vragen vooraf",
+                {"per_ronde": TOP_N, "verdeling": werk["advies_verdeling"]}),
+        ],
+        "laatste_ronde": werk["laatste_ronde"],
+        "laatste_rapport": _agent_state["last_report"],
+        "kosten_per_dag": kosten,
+    }
+
+
+@app.get("/api/agents/logboek")
+def agents_logboek(agent: str = Query(default=""),
+                   listing_id: int = Query(default=0),
+                   stad: str = Query(default=""),
+                   ronde: int = Query(default=0),
+                   status: str = Query(default=""),
+                   voor_id: int = Query(default=0),
+                   limit: int = Query(default=100, le=500)):
+    """Logboek: elke modelaanroep, nieuwste eerst. Filters zijn te combineren.
+    voor_id = bladeren naar oudere regels."""
+    from .db import acties_lijst
+    return acties_lijst(agent=agent, listing_id=listing_id or None, stad=stad,
+                        ronde_id=ronde or None, status=status, limit=limit,
+                        voor_id=voor_id or None)
+
+
+@app.get("/api/agents/logboek/{actie_id}")
+def agents_logboek_detail(actie_id: int):
+    """Eén logregel volledig: wat de agent zag, wat hij antwoordde, welke
+    bronnen, wat de code ermee deed en het effect op de score."""
+    from .db import actie_detail
+    d = actie_detail(actie_id)
+    if not d:
+        return JSONResponse({"error": f"logregel {actie_id} niet gevonden"}, status_code=404)
+    return d
+
+
+@app.get("/api/agents/rondes")
+def agents_rondes(limit: int = Query(default=30, le=200)):
+    from .db import rondes_lijst
+    return rondes_lijst(limit)
+
+
+@app.get("/api/agents/rondes/{ronde_id}")
+def agents_ronde_detail(ronde_id: int):
+    """Eén ronde: rapport, kosten, per agent het aantal aanroepen en fouten,
+    en welke objecten een andere score kregen (voor → na)."""
+    from .db import ronde_detail
+    d = ronde_detail(ronde_id)
+    if not d:
+        return JSONResponse({"error": f"ronde {ronde_id} niet gevonden"}, status_code=404)
+    return d
+
+
+@app.get("/api/agents/instructies")
+def agents_instructies():
+    """De letterlijke opdracht die elke agent krijgt, plus de regels waarmee
+    de code zijn antwoord begrenst. Geen geheime prompts."""
+    from .agents import MODEL_DENKER, MODEL_LEZER, dagbudget
+    from .agents import criticus, lezer, regels
+    return {
+        "lezer": {"model": MODEL_LEZER, "instructie": lezer.SYSTEM,
+                  "antwoordformaat": lezer.SCHEMA,
+                  "grenzen": ["punten altijd tussen −20 en +20",
+                              "huurbeding ingeroepen = altijd −20",
+                              "verhuurd = hooguit −8",
+                              "al gesplitst = hooguit −5",
+                              "'nee' zet de splitsanalyse op niet-splitsbaar",
+                              "'ja' met letterlijk citaat telt als 'genoemd in advertentie'"]},
+        "regelchecker": {"model": MODEL_DENKER, "instructie": regels.SYSTEM_ZOEK,
+                         "omzetten": regels.SYSTEM_JSON,
+                         "antwoordformaat": regels.SCHEMA,
+                         "grenzen": [f"beleid wordt {regels.GELDIG_DAGEN} dagen bewaard",
+                                     "zekerheidsfactor splitsen: ja 1,00 · met vergunning 0,90 · "
+                                     "beperkt 0,65 · nee 0,25 · onduidelijk 0,85",
+                                     "nog niet uitgezocht = 1,00 (geen effect)",
+                                     "minimale woninggrootte van de gemeente gaat vóór de aanname",
+                                     "een bestaande splitsingsvergunning wordt nooit afgewaardeerd"]},
+        "criticus": {"model": MODEL_DENKER, "instructie": criticus.SYSTEM,
+                     "antwoordformaat": criticus.SCHEMA,
+                     "grenzen": ["aftrek hooguit −30",
+                                 "alleen lage ernst: hooguit −5",
+                                 "geen hoge ernst: hooguit −15",
+                                 "Lezer + Criticus samen tussen −35 en +20",
+                                 "'laten lopen' blokkeert de Telegram-melding, niet het dashboard"]},
+        "budget": {"dag_usd": dagbudget()},
+    }
+
+
 @app.post("/api/agents/run")
 def agents_run(max_lezen: int = Query(default=0, le=500),
                top_n: int = Query(default=0, le=25)):
@@ -483,7 +624,7 @@ def agents_run(max_lezen: int = Query(default=0, le=500),
                       "in Railway; zonder key werkt de app zoals voorheen."},
             status_code=400)
     threading.Thread(target=_run_agents,
-                     args=(max_lezen or None, top_n or None), daemon=True).start()
+                     args=(max_lezen or None, top_n or None, "knop"), daemon=True).start()
     return {"status": "gestart"}
 
 

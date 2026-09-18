@@ -115,8 +115,22 @@ def beoordeel(deal: dict, listing: dict) -> dict:
 
 def sla_op(listing_id: int, oordeel: dict) -> dict:
     """Bewaart de kritiek naast het oordeel van de Lezer, zonder dat te wissen."""
+    from . import noteer_toegepast
     from ..db import Listing, SessionLocal
     corr = _correctie(oordeel)
+    voorgesteld = int(oordeel.get("correctie") or 0)
+    ernsten = sorted({v.get("ernst") for v in (oordeel.get("rode_vlaggen") or [])
+                      if isinstance(v, dict) and v.get("ernst")})
+    noteer_toegepast({
+        "correctie_voorgesteld": voorgesteld,
+        "correctie_toegepast": corr,
+        "reden_aanpassing": (
+            "" if voorgesteld == corr else
+            f"begrensd: bij ernst {', '.join(ernsten) or 'geen'} is de maximale aftrek "
+            f"{'5' if not ernsten or ernsten == ['laag'] else '15' if 'hoog' not in ernsten else '30'}"),
+        "advies": oordeel.get("advies"),
+        "melding_telegram": "geblokkeerd" if oordeel.get("advies") == "laten_lopen" else "toegestaan",
+    })
     with SessionLocal() as s:
         row = s.get(Listing, listing_id)
         if not row:
@@ -144,9 +158,11 @@ def sla_op(listing_id: int, oordeel: dict) -> dict:
 
 def beoordeel_deals(deals: list[dict]) -> dict:
     """Loopt de topdeals langs. Duurste agent, dus bewust een korte lijst."""
+    from . import begin, klaar, onderwerp, stap
     from ..db import Listing, SessionLocal
 
     gedaan, fouten = [], []
+    begin("criticus", len(deals))
     for deal in deals:
         if budget_over() <= 0:
             print("[criticus] dagbudget op — rest volgende run", flush=True)
@@ -160,10 +176,15 @@ def beoordeel_deals(deals: list[dict]) -> dict:
         if not listing:
             continue
         try:
-            gedaan.append(sla_op(lid, beoordeel(deal, listing)))
+            with onderwerp(listing_id=lid, stad=(listing.get("city") or "").lower(),
+                           onderwerp=listing.get("address") or f"object {lid}"):
+                gedaan.append(sla_op(lid, beoordeel(deal, listing)))
+            stap("criticus", f"{deal.get('address') or lid} ({deal.get('city') or ''})")
         except Exception as e:
             fouten.append({"id": lid, "fout": str(e)[:160]})
+            stap("criticus", fout=True)
             if "api_key" in str(e).lower() or "authentication" in str(e).lower():
                 break
+    klaar("criticus", f"{len(gedaan)} deals beoordeeld, {len(fouten)} fouten")
     return {"beoordeeld": len(gedaan), "fouten": len(fouten),
             "details": gedaan, "foutmeldingen": fouten[:5]}

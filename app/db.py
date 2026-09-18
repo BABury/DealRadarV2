@@ -276,6 +276,90 @@ class AgentKosten(Base):
     tok_in: Mapped[int] = mapped_column(Integer, default=0)
     tok_out: Mapped[int] = mapped_column(Integer, default=0)
     calls: Mapped[int] = mapped_column(Integer, default=0)
+    laatste: Mapped[dt.datetime] = mapped_column(DateTime, nullable=True)
+
+
+class AgentRonde(Base):
+    """Eén ronde van het agent-team: wanneer, waarom, wat kostte het, en
+    welke objecten kregen daardoor een andere score."""
+    __tablename__ = "agent_rondes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    gestart: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
+    klaar: Mapped[dt.datetime] = mapped_column(DateTime, nullable=True)
+    trigger: Mapped[str] = mapped_column(String(20), default="schema")   # schema | knop
+    status: Mapped[str] = mapped_column(String(20), default="bezig")
+    rapport: Mapped[str] = mapped_column(Text, default="{}")
+    kosten_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    wijzigingen: Mapped[str] = mapped_column(Text, default="[]")         # score voor/na
+
+    def to_dict(self, volledig: bool = False) -> dict:
+        wz = json.loads(self.wijzigingen or "[]")
+        d = {"id": self.id, "gestart": self.gestart.isoformat() if self.gestart else None,
+             "klaar": self.klaar.isoformat() if self.klaar else None,
+             "trigger": self.trigger, "status": self.status,
+             "kosten_usd": round(self.kosten_usd or 0, 4),
+             "aantal_wijzigingen": len(wz)}
+        if volledig:
+            d["rapport"] = json.loads(self.rapport or "{}")
+            d["wijzigingen"] = wz
+        return d
+
+
+class AgentActie(Base):
+    """Logboek: één regel per modelaanroep. Hierin staat letterlijk wat de
+    agent te zien kreeg, wat hij antwoordde, welke bronnen hij gebruikte, wat
+    de code met dat antwoord deed en wat het effect op de score was.
+    Zo is elk oordeel in het dashboard terug te herleiden."""
+    __tablename__ = "agent_acties"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tijd: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
+    ronde_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
+    agent: Mapped[str] = mapped_column(String(30), index=True)
+    stap: Mapped[str] = mapped_column(String(30), default="")      # beoordeling | zoeken | omzetten
+    model: Mapped[str] = mapped_column(String(60), default="")
+    listing_id: Mapped[int] = mapped_column(Integer, nullable=True, index=True)
+    stad: Mapped[str] = mapped_column(String(100), default="", index=True)
+    onderwerp: Mapped[str] = mapped_column(String(300), default="")
+    status: Mapped[str] = mapped_column(String(10), default="ok")  # ok | fout
+    fout: Mapped[str] = mapped_column(Text, default="")
+    invoer: Mapped[str] = mapped_column(Text, default="")          # wat de agent zag
+    antwoord: Mapped[str] = mapped_column(Text, default="")        # ruw antwoord
+    bronnen: Mapped[str] = mapped_column(Text, default="[]")
+    toegepast: Mapped[str] = mapped_column(Text, default="")       # wat de code ermee deed
+    effect: Mapped[str] = mapped_column(Text, default="")          # score voor/na
+    tok_in: Mapped[int] = mapped_column(Integer, default=0)
+    tok_out: Mapped[int] = mapped_column(Integer, default=0)
+    usd: Mapped[float] = mapped_column(Float, default=0.0)
+    duur_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+    def to_dict(self, volledig: bool = False) -> dict:
+        def _j(x, leeg):
+            try:
+                return json.loads(x) if x else leeg
+            except ValueError:
+                return x
+        d = {"id": self.id, "tijd": self.tijd.isoformat() if self.tijd else None,
+             "ronde_id": self.ronde_id, "agent": self.agent, "stap": self.stap,
+             "model": self.model, "listing_id": self.listing_id, "stad": self.stad,
+             "onderwerp": self.onderwerp, "status": self.status,
+             "fout": self.fout, "tok_in": self.tok_in, "tok_out": self.tok_out,
+             "usd": round(self.usd or 0, 5), "duur_ms": self.duur_ms,
+             "toegepast": _j(self.toegepast, None), "effect": _j(self.effect, None),
+             "aantal_bronnen": len(_j(self.bronnen, []) or [])}
+        # Korte samenvatting van het antwoord voor de lijstweergave
+        a = _j(self.antwoord, None)
+        if isinstance(a, dict):
+            d["kern"] = (a.get("samenvatting") or a.get("splitsbaar")
+                         or a.get("toegestaan") or "")
+        else:
+            d["kern"] = (self.antwoord or "")[:160]
+        if volledig:
+            d["invoer"] = self.invoer
+            d["antwoord"] = a if a is not None else self.antwoord
+            d["bronnen"] = _j(self.bronnen, [])
+        return d
 
 
 class ScrapeRun(Base):
@@ -317,6 +401,21 @@ def init_db() -> None:
     except Exception as e:
         print(f"[db] migratie overgeslagen: {e}")
 
+    # Zelfde truc voor de agent-tabellen, zodat een bestaande installatie
+    # niet omvalt als er later een kolom bijkomt.
+    for _tabel, _kolommen in {
+            "agent_kosten": {"laatste": "TIMESTAMP"},
+            "gemeente_regels": {"zekerheid": "VARCHAR(10) DEFAULT 'laag'",
+                                "min_woning_m2": "FLOAT"}}.items():
+        try:
+            have = {c["name"] for c in inspect(engine).get_columns(_tabel)}
+            for _name, _ddl in _kolommen.items():
+                if _name not in have:
+                    with engine.begin() as conn:
+                        conn.execute(text(f"ALTER TABLE {_tabel} ADD COLUMN {_name} {_ddl}"))
+        except Exception as e:
+            print(f"[db] migratie {_tabel} overgeslagen: {e}")
+
 
 _UPDATABLE = {
     c.name for c in Listing.__table__.columns
@@ -340,6 +439,7 @@ def boek_agent_kosten(agent: str, usd: float, tok_in: int, tok_out: int) -> None
         row.tok_in = (row.tok_in or 0) + tok_in
         row.tok_out = (row.tok_out or 0) + tok_out
         row.calls = (row.calls or 0) + 1
+        row.laatste = dt.datetime.utcnow()
         s.commit()
 
 
@@ -362,6 +462,182 @@ def agent_kosten_overzicht(dagen: int = 7) -> list[dict]:
                 .order_by(AgentKosten.dag.desc()).all())
         return [{"dag": d, "agent": a, "usd": round(float(u or 0), 4),
                  "calls": int(c or 0)} for d, a, u, c in rows]
+
+
+# ── Logboek van het agent-team ──────────────────────────────────
+# Invoer wordt ingekort opgeslagen; het antwoord en het effect altijd volledig.
+LOG_INVOER_MAX = int(os.getenv("AGENT_LOG_INVOER_MAX", "12000"))
+
+
+def ronde_start(trigger: str = "schema") -> int:
+    with SessionLocal() as s:
+        r = AgentRonde(trigger=trigger[:20], status="bezig")
+        s.add(r)
+        s.commit()
+        return r.id
+
+
+def ronde_klaar(ronde_id: int, status: str, rapport: dict,
+                kosten_usd: float, wijzigingen: list[dict]) -> None:
+    with SessionLocal() as s:
+        r = s.get(AgentRonde, ronde_id)
+        if not r:
+            return
+        r.klaar = dt.datetime.utcnow()
+        r.status = status[:20]
+        r.rapport = json.dumps(rapport, ensure_ascii=False, default=str)
+        r.kosten_usd = kosten_usd
+        r.wijzigingen = json.dumps(wijzigingen, ensure_ascii=False, default=str)
+        s.commit()
+
+
+def actie_log(**kw) -> int:
+    """Schrijft één logregel. Faalt nooit hard: een logfout mag de agent
+    niet stilleggen, maar wordt wel geprint."""
+    try:
+        invoer = kw.pop("invoer", "") or ""
+        if len(invoer) > LOG_INVOER_MAX:
+            invoer = invoer[:LOG_INVOER_MAX] + f"\n[… ingekort, {len(invoer)} tekens totaal]"
+        for k in ("antwoord", "bronnen", "toegepast", "effect"):
+            if k in kw and not isinstance(kw[k], str):
+                kw[k] = json.dumps(kw[k], ensure_ascii=False, default=str)
+        velden = {c.name for c in AgentActie.__table__.columns} - {"id"}
+        with SessionLocal() as s:
+            a = AgentActie(invoer=invoer, **{k: v for k, v in kw.items() if k in velden})
+            s.add(a)
+            s.commit()
+            return a.id
+    except Exception as e:
+        print(f"[agents] logregel niet opgeslagen: {e}", flush=True)
+        return 0
+
+
+def actie_update(actie_id: int, **kw) -> None:
+    if not actie_id:
+        return
+    try:
+        with SessionLocal() as s:
+            a = s.get(AgentActie, actie_id)
+            if not a:
+                return
+            for k, v in kw.items():
+                if k in ("toegepast", "effect", "antwoord", "bronnen") and not isinstance(v, str):
+                    v = json.dumps(v, ensure_ascii=False, default=str)
+                setattr(a, k, v)
+            s.commit()
+    except Exception as e:
+        print(f"[agents] logregel niet bijgewerkt: {e}", flush=True)
+
+
+def acties_effect_zetten(ronde_id: int, listing_id: int, effect: dict) -> None:
+    """Koppelt de scorewijziging van een object aan alle logregels die in
+    deze ronde over dat object gingen."""
+    with SessionLocal() as s:
+        for a in (s.query(AgentActie)
+                  .filter_by(ronde_id=ronde_id, listing_id=listing_id).all()):
+            a.effect = json.dumps(effect, ensure_ascii=False, default=str)
+        s.commit()
+
+
+def acties_lijst(agent: str = "", listing_id: int | None = None, stad: str = "",
+                 ronde_id: int | None = None, status: str = "",
+                 limit: int = 100, voor_id: int | None = None) -> list[dict]:
+    with SessionLocal() as s:
+        q = s.query(AgentActie)
+        if agent:
+            q = q.filter(AgentActie.agent == agent)
+        if listing_id:
+            q = q.filter(AgentActie.listing_id == listing_id)
+        if stad:
+            q = q.filter(func.lower(AgentActie.stad) == stad.lower())
+        if ronde_id:
+            q = q.filter(AgentActie.ronde_id == ronde_id)
+        if status:
+            q = q.filter(AgentActie.status == status)
+        if voor_id:
+            q = q.filter(AgentActie.id < voor_id)      # bladeren naar ouder
+        return [a.to_dict() for a in
+                q.order_by(AgentActie.id.desc()).limit(limit).all()]
+
+
+def actie_detail(actie_id: int) -> dict | None:
+    with SessionLocal() as s:
+        a = s.get(AgentActie, actie_id)
+        return a.to_dict(volledig=True) if a else None
+
+
+def rondes_lijst(limit: int = 30) -> list[dict]:
+    with SessionLocal() as s:
+        return [r.to_dict() for r in
+                s.query(AgentRonde).order_by(AgentRonde.id.desc()).limit(limit).all()]
+
+
+def ronde_detail(ronde_id: int) -> dict | None:
+    with SessionLocal() as s:
+        r = s.get(AgentRonde, ronde_id)
+        if not r:
+            return None
+        d = r.to_dict(volledig=True)
+        from sqlalchemy import case
+        per_agent = {}
+        for agent, n, fouten in (
+                s.query(AgentActie.agent, func.count(),
+                        func.sum(case((AgentActie.status == "fout", 1), else_=0)))
+                .filter(AgentActie.ronde_id == ronde_id)
+                .group_by(AgentActie.agent).all()):
+            per_agent[agent] = {"aanroepen": n, "fouten": int(fouten or 0)}
+        d["per_agent"] = per_agent
+        return d
+
+
+def agent_werk_overzicht() -> dict:
+    """Wat het agent-team tot nu toe heeft gedaan — de harde cijfers achter
+    het dashboardpaneel. Geen modelaanroepen, puur tellen in de database."""
+    from sqlalchemy import func as _f
+
+    with SessionLocal() as s:
+        gelezen = s.query(Listing).filter(Listing.ai_checked.isnot(None)).count()
+        totaal = s.query(Listing).filter(Listing.is_demo.is_(False)).count()
+        splits = {k or "leeg": n for k, n in
+                  s.query(Listing.ai_splits, _f.count())
+                  .filter(Listing.ai_checked.isnot(None))
+                  .group_by(Listing.ai_splits)}
+        advies = {k or "geen": n for k, n in
+                  s.query(Listing.ai_advies, _f.count())
+                  .filter(Listing.ai_advies != "")
+                  .group_by(Listing.ai_advies)}
+        laatst_gelezen = s.query(_f.max(Listing.ai_checked)).scalar()
+        gem = s.query(GemeenteRegel).all()
+        per_agent = {}
+        for agent, usd, calls, laatste in (
+                s.query(AgentKosten.agent, _f.sum(AgentKosten.usd),
+                        _f.sum(AgentKosten.calls), _f.max(AgentKosten.laatste))
+                .group_by(AgentKosten.agent).all()):
+            per_agent[agent] = {"usd_totaal": round(float(usd or 0), 4),
+                                "calls_totaal": int(calls or 0),
+                                "laatste": laatste.isoformat() if laatste else None}
+        run = (s.query(ScrapeRun).filter_by(source="agents")
+               .order_by(ScrapeRun.started.desc()).first())
+        laatste_ronde = ({"gestart": run.started.isoformat(), "status": run.status,
+                          "gelezen": run.found, "bekritiseerd": run.new,
+                          "bericht": run.message} if run else None)
+
+    verouderd = 0
+    for g in gem:
+        if not g.updated or (dt.datetime.utcnow() - g.updated).days >= 30:
+            verouderd += 1
+    return {
+        "objecten_totaal": totaal,
+        "gelezen": gelezen,
+        "splits_verdeling": splits,
+        "advies_verdeling": advies,
+        "laatst_gelezen": laatst_gelezen.isoformat() if laatst_gelezen else None,
+        "gemeenten": len(gem),
+        "gemeenten_verouderd": verouderd,
+        "gemeenten_beleid": {g.city: g.toegestaan for g in gem},
+        "per_agent": per_agent,
+        "laatste_ronde": laatste_ronde,
+    }
 
 
 def gemeente_regel(city: str) -> dict | None:

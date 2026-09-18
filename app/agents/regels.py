@@ -80,7 +80,7 @@ def _verouderd(regel: dict | None) -> bool:
 
 def check(city: str, forceer: bool = False) -> dict:
     """Beleid van één gemeente. Uit de database als het nog geldig is."""
-    from ..db import gemeente_regel, gemeente_regel_opslaan
+    from ..db import gemeente_regel
     vergeet_cache()
 
     stad = (city or "").strip().lower()
@@ -90,7 +90,14 @@ def check(city: str, forceer: bool = False) -> dict:
     if bestaand and not forceer and not _verouderd(bestaand):
         return {**bestaand, "uit_cache": True}
 
+    from . import noteer_toegepast, onderwerp
     net = stad.replace("-", " ").title()
+    with onderwerp(stad=stad, onderwerp=net, listing_id=None):
+        return _check_zoek(stad, net, bestaand, noteer_toegepast)
+
+
+def _check_zoek(stad: str, net: str, bestaand: dict | None, noteer_toegepast) -> dict:
+    from ..db import gemeente_regel_opslaan
     verslag, bronnen = onderzoek(
         agent="regelchecker", model=MODEL_DENKER, system=SYSTEM_ZOEK,
         prompt=(f"Gemeente: {net}\n\nZoek het actuele beleid voor woningsplitsing "
@@ -113,15 +120,29 @@ def check(city: str, forceer: bool = False) -> dict:
                     ("quota_of_verboden", "parkeernorm", "let_op", "peiljaar")},
         "bronnen": bronnen[:8],
     }
+    # Wat verandert er door dit beleid? Vorige stand naast de nieuwe, plus
+    # de rem op splitszekerheid die de code eruit afleidt.
+    nieuw_factor = {"ja": 1.0, "ja_met_vergunning": 0.9, "beperkt": 0.65,
+                    "nee": 0.25}.get(opslaan["toegestaan"] or "onbekend", 0.85)
+    noteer_toegepast({
+        "beleid_was": (bestaand or {}).get("toegestaan") or "niet uitgezocht",
+        "beleid_nu": opslaan["toegestaan"],
+        "zekerheidsfactor_splitsen": nieuw_factor,
+        "min_woning_m2": opslaan["min_woning_m2"],
+        "bronnen_bewaard": len(opslaan["bronnen"]),
+        "geldig_tot": (dt.datetime.utcnow() + dt.timedelta(days=GELDIG_DAGEN)).date().isoformat(),
+    })
     return {**gemeente_regel_opslaan(stad, opslaan), "uit_cache": False}
 
 
 def check_steden(steden: list[str], forceer: bool = False) -> dict:
     """Werkt een lijst gemeenten af; stopt zodra het budget op is."""
-    from . import budget_over
+    from . import begin, budget_over, klaar, stap
 
     gedaan, fouten = [], []
-    for stad in dict.fromkeys(s.strip().lower() for s in steden if s and s.strip()):
+    lijst = list(dict.fromkeys(s.strip().lower() for s in steden if s and s.strip()))
+    begin("regelchecker", len(lijst))
+    for stad in lijst:
         if budget_over() <= 0:
             print("[regelchecker] dagbudget op — rest volgende run", flush=True)
             break
@@ -131,8 +152,11 @@ def check_steden(steden: list[str], forceer: bool = False) -> dict:
                 gedaan.append({"stad": stad, "toegestaan": r.get("toegestaan"),
                                "uit_cache": r.get("uit_cache"),
                                "zekerheid": r.get("zekerheid")})
+            stap("regelchecker", stad)
         except Exception as e:
             fouten.append({"stad": stad, "fout": str(e)[:160]})
+            stap("regelchecker", stad, fout=True)
+    klaar("regelchecker", f"{len(gedaan)} gemeenten, {len(fouten)} fouten")
     return {"gecheckt": len(gedaan), "fouten": len(fouten),
             "steden": gedaan, "foutmeldingen": fouten[:5]}
 
