@@ -38,7 +38,14 @@ Zoek specifiek naar:
 
 Gebruik alleen bronnen van de gemeente zelf, overheid.nl, lokaleregelgeving.
 overheid.nl of serieuze vakmedia. Geef per bevinding de bron. Zeg het eerlijk
-als je iets niet vindt."""
+als je iets niet vindt.
+
+Werkwijze:
+- Je hebt een beperkt aantal zoekopdrachten. Herhaal nooit dezelfde zoekvraag;
+  maak elke volgende vraag specifieker (bijvoorbeeld de naam van de verordening).
+- Schrijf ALTIJD een verslag op basis van wat je gevonden hebt, ook als het
+  onvolledig is. Vraag nooit om een vervolgbeurt of om toestemming: er komt
+  geen vervolgbeurt."""
 
 SYSTEM_JSON = """Zet het onderzoeksverslag om in het gevraagde formaat.
 Niets toevoegen wat er niet staat. Als het verslag onzeker is, zet zekerheid
@@ -100,10 +107,36 @@ def check(city: str, forceer: bool = False) -> dict:
     if bestaand and not forceer and not _verouderd(bestaand):
         return {**bestaand, "uit_cache": True}
 
+    # Afkoelperiode: mislukte het onlangs, dan niet bij elk object opnieuw
+    # $0,20 uitgeven. Na AFKOEL_UREN mag het weer (of met forceer=True).
+    if not forceer:
+        recent = recent_mislukt(stad)
+        if recent:
+            return {"city": stad, "toegestaan": "onbekend", "overgeslagen": True,
+                    "reden": f"zoektocht mislukte om {recent[11:16]} UTC; opnieuw na "
+                             f"{AFKOEL_UREN} uur"}
+
     from . import noteer_toegepast, onderwerp
     net = stad.replace("-", " ").title()
     with onderwerp(stad=stad, onderwerp=net, listing_id=None):
         return _check_zoek(stad, net, bestaand, noteer_toegepast)
+
+
+AFKOEL_UREN = int(os.getenv("AGENT_RIK_AFKOEL_UREN", "24"))
+
+
+def recent_mislukt(stad: str) -> str | None:
+    """Tijdstip (iso) van een mislukte zoektocht voor deze stad binnen de
+    afkoelperiode, of None."""
+    from ..db import AgentActie, SessionLocal
+    grens = dt.datetime.utcnow() - dt.timedelta(hours=AFKOEL_UREN)
+    with SessionLocal() as s:
+        a = (s.query(AgentActie)
+             .filter(AgentActie.agent == "regelchecker", AgentActie.stap == "beleid",
+                     AgentActie.stad == stad, AgentActie.tijd >= grens,
+                     AgentActie.toegepast.like('%"opgeslagen": false%'))
+             .order_by(AgentActie.id.desc()).first())
+        return a.tijd.isoformat() if a else None
 
 
 def _zoekopdrachten() -> int:
@@ -175,6 +208,10 @@ def check_steden(steden: list[str], forceer: bool = False) -> dict:
             break
         try:
             r = check(stad, forceer=forceer)
+            if r and r.get("overgeslagen"):
+                print(f"[regelchecker] {stad}: {r['reden']}", flush=True)
+                stap("regelchecker", stad)
+                continue
             if r:
                 gedaan.append({"stad": stad, "toegestaan": r.get("toegestaan"),
                                "uit_cache": r.get("uit_cache"),

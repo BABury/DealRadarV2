@@ -395,6 +395,29 @@ def onderzoek(*, agent: str, model: str, system: str, prompt: str,
             elif inhoud is not None:
                 zoekvragen.append(f"(zoekfout: {getattr(inhoud, 'error_code', inhoud)})")
     verslag = _blokken_tekst(blokken)
+    # Liep hij vast op de zoeklimiet zonder verslag ("mag ik een vervolgbeurt"),
+    # dan één afrondbeurt: zelfde bronnen, geen nieuwe zoekopdrachten.
+    if stap == "zoeken" and _geen_verslag(verslag) and not _stop.is_set():
+        try:
+            r2 = _client_get().messages.create(
+                model=model, max_tokens=max_tokens, system=system, tools=web,
+                tool_choice={"type": "none"},
+                messages=[{"role": "user", "content": prompt},
+                          {"role": "assistant", "content": r.content},
+                          {"role": "user", "content":
+                           "Je zoeklimiet is bereikt. Schrijf nu je verslag op basis van de "
+                           "bronnen die je hierboven al gevonden hebt. Geen nieuwe zoekopdrachten "
+                           "en geen vragen terug; wat je niet kon vinden benoem je als onbekend."}],
+                **_opties(model))
+            _boek(model, r2.usage, agent)
+            tok_in += int(getattr(r2.usage, "input_tokens", 0) or 0)
+            tok_out += int(getattr(r2.usage, "output_tokens", 0) or 0)
+            afgerond = _blokken_tekst(r2.content)
+            if afgerond:
+                verslag = afgerond
+                zoekvragen.append("(afrondbeurt: verslag geschreven uit de gevonden bronnen)")
+        except Exception as e:
+            zoekvragen.append(f"(afrondbeurt mislukt: {str(e)[:120]})")
     # De zoekvragen horen bij het spoor: je ziet waarop hij gezocht heeft.
     invoer = prompt + ("\n\n[ZOEKVRAGEN VAN DE AGENT]\n- " + "\n- ".join(zoekvragen)
                        if zoekvragen else "")
@@ -405,6 +428,14 @@ def onderzoek(*, agent: str, model: str, system: str, prompt: str,
     if fout:
         raise RuntimeError(f"{agent}: {fout}")
     return verslag, bronnen
+
+
+def _geen_verslag(tekst: str) -> bool:
+    """Herkent een 'ik kon niet verder zoeken'-antwoord zonder inhoud."""
+    t = (tekst or "").lower()
+    signalen = ("zoeklimiet", "limiet voor zoekopdrachten", "vervolgbeurt",
+                "volgende beurt", "search limit", "geen zoekopdrachten meer")
+    return len(t) < 400 or (any(x in t for x in signalen) and len(t) < 2500)
 
 
 def status() -> dict:
