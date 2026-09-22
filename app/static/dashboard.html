@@ -365,7 +365,7 @@ function aiChip(r) {
   const tekst = { ja: "splitsbaar", nee: "niet splitsbaar", onzeker: "onzeker" }[r.ai_splits] || "gelezen";
   const tip = [r.ai_samenvatting,
                b.bewijs ? `Bewijs: "${b.bewijs}"` : "",
-               (b.risicos || []).length ? "Risico: " + b.risicos.join("; ") : "",
+               lijst(b.risicos).length ? "Risico: " + lijst(b.risicos).join("; ") : "",
                r.ai_punten != null ? `Score-effect: ${r.ai_punten > 0 ? "+" : ""}${r.ai_punten}` : ""]
               .filter(Boolean).join("\n").replace(/"/g, "&quot;");
   const adv = { laten_lopen: ["laten lopen", "var(--hot)"], uitzoeken: ["eerst uitzoeken", "var(--warn)"],
@@ -511,6 +511,16 @@ async function load(behoudPorties = false) {
 }
 
 function rijHtml(r) {
+  try {
+    return rijHtmlInhoud(r);
+  } catch (e) {
+    // Nooit de hele lijst verliezen door een rare regel in de data
+    console.warn("rij overgeslagen", r && r.id, e);
+    return `<tr data-id="${r && r.id}"><td colspan="13" class="muted" style="font-size:12px">${esc((r && r.address) || "object")}: kon niet worden weergegeven (${esc(e.message)})</td></tr>`;
+  }
+}
+
+function rijHtmlInhoud(r) {
   const cls = r.flip_score >= 60 ? "s-hot" : r.flip_score >= 40 ? "s-warm" : "s-cool";
   const cs = cityStats[(r.city || "").toLowerCase()];
     const drops = (r.price_history || []).filter(h => h.to < h.from).length;
@@ -862,6 +872,9 @@ let agWeergave = "";          // "" | "logboek" | "rondes" | "instructies"
 let agFilter = {};
 let agOudste = null;          // voor "oudere regels laden"
 
+// Een agent-antwoord kan een lijst zijn, maar soms ook los stukje tekst.
+// Alles wat we als lijst tonen gaat hier doorheen: de pagina valt nooit om.
+const lijst = x => Array.isArray(x) ? x : (x === null || x === undefined || x === "" ? [] : [x]);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 function agBlok(html) {
@@ -1082,7 +1095,7 @@ async function toonRonde(id) {
   const fouten = [];
   ["lezer", "regelchecker", "criticus"].forEach(n => {
     const d = rp[n] || {};
-    (d.foutmeldingen || []).forEach(f => fouten.push([n, f.fout || JSON.stringify(f)]));
+    lijst(d.foutmeldingen).forEach(f => fouten.push([n, (f && f.fout) || JSON.stringify(f)]));
     if (d.fout) fouten.push([n, d.fout]);
   });
   agBlok(`
@@ -1290,7 +1303,7 @@ function renderAgentLog(s) {
   const fouten = [];
   ["lezer", "regelchecker", "criticus"].forEach(naam => {
     const deel = r && r[naam];
-    if (deel && deel.foutmeldingen) deel.foutmeldingen.forEach(f =>
+    if (deel && deel.foutmeldingen) lijst(deel.foutmeldingen).forEach(f =>
       fouten.push(`${naam}: ${f.fout || JSON.stringify(f)}`));
     if (deel && deel.fout) fouten.push(`${naam}: ${deel.fout}`);
   });
@@ -1381,8 +1394,8 @@ function aiBlok(r) {
       ${rij("staat", [b.staat, b.verbouwzwaarte && `verbouwing ${b.verbouwzwaarte}`].filter(Boolean).join(" · "))}
       ${rij("monument", b.monument && b.monument !== "nee" ? b.monument : "")}
       ${rij("huursituatie", b.verhuurd && b.verhuurd !== "leeg" ? b.verhuurd : "")}
-      ${rij("risico's", (b.risicos || []).join(" · "))}
-      ${rij("kansen", (b.kansen || []).join(" · "))}
+      ${rij("risico's", lijst(b.risicos).join(" · "))}
+      ${rij("kansen", lijst(b.kansen).join(" · "))}
     </table>` : "";
 
   const gem = g ? `
@@ -1391,20 +1404,20 @@ function aiBlok(r) {
       ${rij("beleid", `<b>${(g.toegestaan || "").replace(/_/g, " ")}</b>${g.vergunning_nodig ? " · vergunning nodig" : ""}`)}
       ${rij("min. woning", g.min_woning_m2 ? g.min_woning_m2 + " m²" : "")}
       ${rij("samenvatting", g.samenvatting)}
-      ${rij("let op", ((g.details || {}).let_op || []).join(" · "))}
+      ${rij("let op", lijst((g.details || {}).let_op).join(" · "))}
       ${rij("zekerheid", g.zekerheid)}
-      ${rij("bronnen", (g.bronnen || []).slice(0, 3).map((u, i) =>
+      ${rij("bronnen", lijst(g.bronnen).slice(0, 3).map((u, i) =>
           `<a href="${u}" target="_blank" rel="noopener">bron ${i + 1}</a>`).join(" · "))}
     </table>` : "";
 
   const krit = c ? `
     <div style="display:flex; gap:8px; align-items:center;">${avatar("criticus", 26)}<span>${wie("criticus")} <span class="muted">— bezwaren tegen deze deal</span></span></div>
     <div style="margin:6px 0 12px; font-size:12px;">
-      ${(c.rode_vlaggen || []).map(v =>
+      ${lijst(c.rode_vlaggen).filter(v => v && typeof v === "object").map(v =>
         `<div style="margin-bottom:3px"><span style="color:${ernstKleur[v.ernst] || "var(--muted)"}">●</span>
          <b>${v.punt}</b> <span class="muted">— ${v.waarom}</span></div>`).join("")}
-      ${(c.eerst_uitzoeken || []).length ? `<div style="margin-top:8px"><b>Eerst uitzoeken:</b>
-        <ul style="margin:4px 0 0 18px">${c.eerst_uitzoeken.map(v => `<li>${v}</li>`).join("")}</ul></div>` : ""}
+      ${lijst(c.eerst_uitzoeken).length ? `<div style="margin-top:8px"><b>Eerst uitzoeken:</b>
+        <ul style="margin:4px 0 0 18px">${lijst(c.eerst_uitzoeken).map(v => `<li>${esc(v)}</li>`).join("")}</ul></div>` : ""}
       <div style="margin-top:8px">Advies: <b>${(r.ai_advies || "").replace(/_/g, " ")}</b>
         <span class="muted">· score-effect ${r.ai_punten > 0 ? "+" : ""}${r.ai_punten ?? 0}</span></div>
     </div>` : "";

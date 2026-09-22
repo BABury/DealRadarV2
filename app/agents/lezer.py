@@ -13,7 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
-from . import MODEL_LEZER, budget_over, kort, vraag_json
+from . import MODEL_LEZER, budget_over, kort, normaliseer, vraag_json
 
 SYSTEM = """Je bent vastgoedanalist voor een Nederlandse belegger. Zijn strategie:
 een pand kopen en splitsen in meerdere zelfstandige appartementen, met zo min
@@ -83,9 +83,10 @@ def _prompt(d: dict) -> str:
 
 def beoordeel(listing: dict) -> dict:
     """Eén object. Gooit AgentUit als de key mist of het budget op is."""
-    return vraag_json(agent="lezer", model=MODEL_LEZER, system=SYSTEM,
-                      prompt=_prompt(listing), schema=SCHEMA,
-                      naam="beoordeling", max_tokens=1200)
+    oordeel = vraag_json(agent="lezer", model=MODEL_LEZER, system=SYSTEM,
+                         prompt=_prompt(listing), schema=SCHEMA,
+                         naam="beoordeling", max_tokens=1200)
+    return normaliseer(oordeel, ("risicos", "kansen"))
 
 
 def _punten(oordeel: dict) -> int:

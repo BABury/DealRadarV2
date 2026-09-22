@@ -13,7 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
-from . import MODEL_DENKER, als_json, budget_over, kort, vraag_json
+from . import MODEL_DENKER, als_json, budget_over, kort, normaliseer, vraag_json
 from . import regels as regelchecker
 
 SYSTEM = """Je bent de kritische partner van een Nederlandse vastgoedbelegger. Hij
@@ -108,9 +108,10 @@ def _correctie(oordeel: dict) -> int:
 
 
 def beoordeel(deal: dict, listing: dict) -> dict:
-    return vraag_json(agent="criticus", model=MODEL_DENKER, system=SYSTEM,
-                      prompt=_prompt(deal, listing), schema=SCHEMA,
-                      naam="kritiek", max_tokens=8000)
+    oordeel = vraag_json(agent="criticus", model=MODEL_DENKER, system=SYSTEM,
+                         prompt=_prompt(deal, listing), schema=SCHEMA,
+                         naam="kritiek", max_tokens=8000)
+    return normaliseer(oordeel, ("rode_vlaggen", "eerst_uitzoeken"))
 
 
 def sla_op(listing_id: int, oordeel: dict) -> dict:

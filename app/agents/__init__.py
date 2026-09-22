@@ -454,6 +454,24 @@ def status() -> dict:
     }
 
 
+def als_lijst(x) -> list:
+    """Een model levert een lijstveld soms als losse tekst. Dan maken we er
+    een lijst van, zodat opslag en dashboard er altijd hetzelfde mee kunnen."""
+    if isinstance(x, list):
+        return [i for i in x if i not in (None, "")]
+    if x in (None, "", {}):
+        return []
+    return [x]
+
+
+def normaliseer(oordeel: dict, lijstvelden: tuple[str, ...]) -> dict:
+    d = dict(oordeel or {})
+    for k in lijstvelden:
+        if k in d:
+            d[k] = als_lijst(d[k])
+    return d
+
+
 def kort(tekst: str | None, maxlen: int = 6000) -> str:
     """Advertentieteksten kunnen lang zijn; wij betalen per token."""
     t = (tekst or "").strip()

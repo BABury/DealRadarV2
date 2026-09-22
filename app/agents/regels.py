@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 
-from . import MODEL_DENKER, als_json, onderzoek, vraag_json
+from . import MODEL_DENKER, als_json, normaliseer, onderzoek, vraag_json
 
 def geldig_dagen() -> int:
     """Hoelang een uitkomst van Rik geldig blijft (instelbaar in het dashboard)."""
@@ -157,6 +157,7 @@ def _check_zoek(stad: str, net: str, bestaand: dict | None, noteer_toegepast) ->
                       system=SYSTEM_JSON, schema=SCHEMA, naam="beleid",
                       prompt=f"Gemeente: {net}\n\nONDERZOEKSVERSLAG:\n{verslag}",
                       max_tokens=8000)
+    data = normaliseer(data, ("let_op",))
 
     opslaan = {
         "toegestaan": data.get("toegestaan"),
