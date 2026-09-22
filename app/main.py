@@ -259,6 +259,7 @@ def opportunities(
     sort: str = Query(default="score"),
     focus: int = Query(default=1),
     limit: int = Query(default=200, le=1000),
+    offset: int = Query(default=0, ge=0),
 ):
     with SessionLocal() as s:
         qry = s.query(Listing)
@@ -277,7 +278,8 @@ def opportunities(
         # score (standaard) | nieuw = laatst gevonden eerst | oud = langst in de lijst
         volgorde = {"nieuw": desc(Listing.first_seen),
                     "oud": Listing.first_seen.asc()}.get(sort, desc(Listing.flip_score))
-        rows = qry.order_by(volgorde).limit(limit).all()
+        # offset: de lijst in het dashboard laadt in porties door
+        rows = qry.order_by(volgorde).offset(offset).limit(limit).all()
         return [r.to_dict() for r in rows]
 
 

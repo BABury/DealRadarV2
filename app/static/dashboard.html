@@ -72,6 +72,15 @@
   .vx thead th { padding: 6px 8px; position: static; }
   .vx-income { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
   .vx-income b { font-size: 15px; }
+  /* ── Hoofdtabs ── */
+  .hoofdtabs { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:0 0 18px;
+               border-bottom:1px solid var(--border); padding-bottom:10px; position:sticky; top:0;
+               background:var(--bg); z-index:20; padding-top:10px; }
+  .hoofdtabs .ht { font-size:14px; padding:8px 14px; border-radius:10px; background:transparent; }
+  .hoofdtabs .ht:hover { background:var(--panel2); }
+  .hoofdtabs .ht.on { background:var(--panel2); border-color:var(--accent2); color:var(--accent2); font-weight:600; }
+  .paneel[hidden] { display:none !important; }
+
   /* ── Agent-team: avatars, logboek, spoor ── */
   .av { display:inline-block; border-radius:50%; flex-shrink:0; vertical-align:middle; line-height:0; }
   .av svg { width:100%; height:100%; display:block; }
@@ -145,7 +154,18 @@
 </div>
 
 <div class="wrap">
-  <div class="cards">
+  <nav class="hoofdtabs">
+    <button class="ht" data-t="objecten" onclick="setHoofdtab('objecten')">🏠 Objecten</button>
+    <button class="ht" data-t="prijzen" onclick="setHoofdtab('prijzen')">📊 Verkoopprijzen</button>
+    <button class="ht" data-t="team" onclick="setHoofdtab('team')">🤖 Agent-team</button>
+    <button class="ht" data-t="kansen" onclick="setHoofdtab('kansen')">🏆 Top-kansen</button>
+    <button class="ht" data-t="analyse" onclick="setHoofdtab('analyse')">🔎 Adres-analyse</button>
+    <span style="flex:1"></span>
+    <span id="tab-hint" class="muted" style="font-size:12px"></span>
+  </nav>
+
+  <section class="paneel" id="paneel-objecten">
+<div class="cards">
     <div class="card"><div class="k">Objecten in database</div><div class="v" id="c-total">–</div></div>
     <div class="card"><div class="k">Hot leads (score ≥ 60)</div><div class="v" id="c-hot" style="color:var(--hot)">–</div></div>
     <div class="card"><div class="k">Gemiddelde flip-score</div><div class="v" id="c-avg">–</div></div>
@@ -153,17 +173,82 @@
     <div class="card"><div class="k">Bronnen</div><div class="v" id="c-sources">–</div></div>
   </div>
 
-  <div class="card" style="margin-bottom:18px;">
+  <div class="filters">
+    <select id="f-city" onchange="load()"><option value="">Alle steden</option></select>
+    <select id="f-source" onchange="load()">
+      <option value="">Alle bronnen</option>
+      <option value="funda">Funda</option>
+      <option value="vastgoedveiling">Vastgoedveiling</option>
+      <option value="veilingnotaris">Veilingnotaris</option>
+      <option value="bog_auctions">BOG Auctions</option>
+      <option value="biedboek">Biedboek</option>
+    </select>
+    <select id="f-sort" onchange="load()" title="Volgorde van de lijst">
+      <option value="score">Sorteer: hoogste score</option>
+      <option value="nieuw">Sorteer: nieuwst gevonden</option>
+      <option value="oud">Sorteer: langst in de lijst</option>
+    </select>
+    <input type="text" id="f-q" placeholder="Zoek adres…" oninput="debounceLoad()">
+    <label title="Alleen de grote steden waar splitsen zin heeft (in te stellen onder Agent-team → Instellingen)"
+           style="font-size:13px; white-space:nowrap;">
+      <input type="checkbox" id="f-focus" checked onchange="load()"> alleen focussteden</label>
+    <button onclick="verversLijst()" title="Lijst opnieuw ophalen (hij verdwijnt nooit automatisch)">↻</button>
+    <label>Min. score <span id="f-score-v">30</span></label>
+    <input type="range" id="f-score" min="0" max="90" step="5" value="30"
+           oninput="document.getElementById('f-score-v').textContent=this.value" onchange="load()">
+    
+  <table>
+    <thead><tr>
+      <th>Score</th><th>Object</th><th>Stad</th><th>Wijk</th><th>Prijs</th><th>€/m²</th>
+      <th>Markt €/m²</th><th>t.o.v. markt</th>
+      <th>Label</th><th>Bouwjaar</th><th>Signalen</th><th>Gevonden</th><th>Bron</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="lijst-voet" style="display:flex; gap:12px; align-items:center; justify-content:center; padding:14px 0;"></div>
+
+  <div id="srcstatus"></div>
+</section>
+
+  <section class="paneel" id="paneel-prijzen" hidden>
+<div class="card" style="margin-bottom:18px;" id="bench-card">
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-      <b style="white-space:nowrap;">🔎 Adres-analyse</b>
-      <input type="text" id="an-q" placeholder="Straat huisnummer plaats — of plak een Funda-link"
-             style="flex:1; min-width:280px;" onkeydown="if(event.key==='Enter')runAnalyse()">
-      <button onclick="runAnalyse()">Analyseer potentie</button>
+      <b style="white-space:nowrap;">📊 Marktscorebord — €/m² verkocht per segment</b>
+      <select id="b-city" onchange="renderBenchmarks()"></select>
+      <button onclick="refreshSold()" style="opacity:.85;">↻ Ververs verkocht-data</button>
+      <span class="muted" style="font-size:12px;">klein &lt;50 m² · midden 50–100 m² · groot &gt;100 m² — p25 / <b>mediaan</b> / p75 (aantal). Benchmark = laatste vraagprijs van verkochte objecten.</span>
     </div>
-    <div id="an-result" style="display:none; margin-top:14px; font-size:14px;"></div>
+    <div id="bench-body" style="margin-top:12px;"><span class="muted">Laden…</span></div>
   </div>
 
-  <div class="card" style="margin-bottom:18px;" id="top5-card">
+    </section>
+
+  <section class="paneel" id="paneel-team" hidden>
+<div class="card" style="margin-bottom:18px;" id="agent-card">
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <b style="white-space:nowrap;">Agent-team</b>
+      <span id="agent-team-av" style="display:inline-flex; gap:2px;"></span>
+      <span id="agent-pill" class="muted" style="font-size:12px"></span>
+      <span style="flex:1"></span>
+      <label title="Hoofdschakelaar: uit = niets kan het team starten (knop, Telegram, schema), en wat loopt stopt"
+             style="font-size:12px; display:inline-flex; gap:6px; align-items:center; white-space:nowrap;">
+        <input type="checkbox" id="agent-schakelaar" onchange="zetSchakelaar(this.checked)"> team aan</label>
+      <button id="btn-agent-stop" onclick="stopAgents()" hidden
+              style="background:var(--hot); color:#fff; border-color:var(--hot); font-weight:600;">⏹ Stop</button>
+      <button onclick="runAgents()" id="btn-agents2" style="opacity:.9;">▶ Nu een ronde draaien</button>
+      <button onclick="toonLogboek({})" title="Elke stap van elke agent: wat ze zagen, antwoordden en veranderden">📜 Logboek</button>
+      <button onclick="toonRondes()" title="Per ronde: welke objecten kregen een andere score">🔁 Rondes</button>
+      <button onclick="toonInstructies()" title="De letterlijke opdracht van elke agent en de grenzen die de code stelt">📋 Opdrachten</button>
+      <button onclick="toonInstellingen()" title="Focussteden, wie wat doet, hoeveel per ronde en het budget">⚙️ Instellingen</button>
+    </div>
+    <div id="agent-body" style="margin-top:12px;"><span class="muted">Laden…</span></div>
+    <div id="agent-log" style="display:none; margin-top:12px; border-top:1px solid var(--border); padding-top:12px;"></div>
+  </div>
+
+    </section>
+
+  <section class="paneel" id="paneel-kansen" hidden>
+<div class="card" style="margin-bottom:18px;" id="top5-card">
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <b style="white-space:nowrap;" id="top5-title">🏆 Top 5 — grote steden</b>
       <select id="p-region" onchange="loadTop5()" title="Welke regio">
@@ -230,71 +315,21 @@
     <div id="top5-list" style="margin-top:8px;"><span class="muted">Laden…</span></div>
   </div>
 
-  <div class="card" style="margin-bottom:18px;" id="agent-card">
+    </section>
+
+  <section class="paneel" id="paneel-analyse" hidden>
+<div class="card" style="margin-bottom:18px;">
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-      <b style="white-space:nowrap;">Agent-team</b>
-      <span id="agent-team-av" style="display:inline-flex; gap:2px;"></span>
-      <span id="agent-pill" class="muted" style="font-size:12px"></span>
-      <span style="flex:1"></span>
-      <label title="Hoofdschakelaar: uit = niets kan het team starten (knop, Telegram, schema), en wat loopt stopt"
-             style="font-size:12px; display:inline-flex; gap:6px; align-items:center; white-space:nowrap;">
-        <input type="checkbox" id="agent-schakelaar" onchange="zetSchakelaar(this.checked)"> team aan</label>
-      <button id="btn-agent-stop" onclick="stopAgents()" hidden
-              style="background:var(--hot); color:#fff; border-color:var(--hot); font-weight:600;">⏹ Stop</button>
-      <button onclick="runAgents()" id="btn-agents2" style="opacity:.9;">▶ Nu een ronde draaien</button>
-      <button onclick="toonLogboek({})" title="Elke stap van elke agent: wat ze zagen, antwoordden en veranderden">📜 Logboek</button>
-      <button onclick="toonRondes()" title="Per ronde: welke objecten kregen een andere score">🔁 Rondes</button>
-      <button onclick="toonInstructies()" title="De letterlijke opdracht van elke agent en de grenzen die de code stelt">📋 Opdrachten</button>
-      <button onclick="toonInstellingen()" title="Focussteden, wie wat doet, hoeveel per ronde en het budget">⚙️ Instellingen</button>
+      <b style="white-space:nowrap;">🔎 Adres-analyse</b>
+      <input type="text" id="an-q" placeholder="Straat huisnummer plaats — of plak een Funda-link"
+             style="flex:1; min-width:280px;" onkeydown="if(event.key==='Enter')runAnalyse()">
+      <button onclick="runAnalyse()">Analyseer potentie</button>
     </div>
-    <div id="agent-body" style="margin-top:12px;"><span class="muted">Laden…</span></div>
-    <div id="agent-log" style="display:none; margin-top:12px; border-top:1px solid var(--border); padding-top:12px;"></div>
+    <div id="an-result" style="display:none; margin-top:14px; font-size:14px;"></div>
   </div>
 
-  <div class="card" style="margin-bottom:18px;" id="bench-card">
-    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-      <b style="white-space:nowrap;">📊 Marktscorebord — €/m² verkocht per segment</b>
-      <select id="b-city" onchange="renderBenchmarks()"></select>
-      <button onclick="refreshSold()" style="opacity:.85;">↻ Ververs verkocht-data</button>
-      <span class="muted" style="font-size:12px;">klein &lt;50 m² · midden 50–100 m² · groot &gt;100 m² — p25 / <b>mediaan</b> / p75 (aantal). Benchmark = laatste vraagprijs van verkochte objecten.</span>
-    </div>
-    <div id="bench-body" style="margin-top:12px;"><span class="muted">Laden…</span></div>
-  </div>
+    </section>
 
-  <div class="filters">
-    <select id="f-city" onchange="load()"><option value="">Alle steden</option></select>
-    <select id="f-source" onchange="load()">
-      <option value="">Alle bronnen</option>
-      <option value="funda">Funda</option>
-      <option value="vastgoedveiling">Vastgoedveiling</option>
-      <option value="veilingnotaris">Veilingnotaris</option>
-      <option value="bog_auctions">BOG Auctions</option>
-      <option value="biedboek">Biedboek</option>
-    </select>
-    <select id="f-sort" onchange="load()" title="Volgorde van de lijst">
-      <option value="score">Sorteer: hoogste score</option>
-      <option value="nieuw">Sorteer: nieuwst gevonden</option>
-      <option value="oud">Sorteer: langst in de lijst</option>
-    </select>
-    <input type="text" id="f-q" placeholder="Zoek adres…" oninput="debounceLoad()">
-    <label title="Alleen de grote steden waar splitsen zin heeft (in te stellen onder Agent-team → Instellingen)"
-           style="font-size:13px; white-space:nowrap;">
-      <input type="checkbox" id="f-focus" checked onchange="load()"> alleen focussteden</label>
-    <label>Min. score <span id="f-score-v">30</span></label>
-    <input type="range" id="f-score" min="0" max="90" step="5" value="30"
-           oninput="document.getElementById('f-score-v').textContent=this.value" onchange="load()">
-  </div>
-
-  <table>
-    <thead><tr>
-      <th>Score</th><th>Object</th><th>Stad</th><th>Wijk</th><th>Prijs</th><th>€/m²</th>
-      <th>Markt €/m²</th><th>t.o.v. markt</th>
-      <th>Label</th><th>Bouwjaar</th><th>Signalen</th><th>Gevonden</th><th>Bron</th>
-    </tr></thead>
-    <tbody id="rows"></tbody>
-  </table>
-
-  <div id="srcstatus"></div>
 </div>
 
 <script>
@@ -341,7 +376,7 @@ function aiChip(r) {
       title="Lotte (Lezer):\n${tip}">${avatar("lezer", 14)}${tekst}</span>${advies}`;
 }
 
-function debounceLoad() { clearTimeout(t); t = setTimeout(load, 300); }
+function debounceLoad() { clearTimeout(t); t = setTimeout(() => load(), 300); }
 
 async function loadStats() {
   const s = await (await fetch("/api/stats")).json();
@@ -358,22 +393,126 @@ async function loadStats() {
     s.cities.map(c => `<option ${c===cur?"selected":""}>${c}</option>`).join("");
 }
 
-async function load() {
+// ── Hoofdtabs: één onderwerp per keer, in vaste volgorde ──────
+const HOOFDTABS = ["objecten", "prijzen", "team", "kansen", "analyse"];
+let hoofdtab = "objecten";
+const geladen = { prijzen: false, kansen: false, team: false };
+
+function setHoofdtab(naam) {
+  if (!HOOFDTABS.includes(naam)) naam = "objecten";
+  hoofdtab = naam;
+  HOOFDTABS.forEach(k => {
+    const paneel = document.getElementById("paneel-" + k);
+    if (paneel) paneel.hidden = k !== naam;
+  });
+  document.querySelectorAll(".hoofdtabs .ht").forEach(b => b.classList.toggle("on", b.dataset.t === naam));
+  try { localStorage.setItem("dr-hoofdtab", naam); } catch (e) {}
+  // Pas laden wanneer je het tabblad opent — scheelt werk bij het opstarten
+  if (naam === "prijzen" && !geladen.prijzen) { geladen.prijzen = true; loadBenchmarks(); }
+  if (naam === "kansen" && !geladen.kansen) { geladen.kansen = true; loadTop5(); }
+  if (naam === "team" && !geladen.team) { geladen.team = true; loadAgentPanel(); }
+  if (naam === "objecten" && !document.querySelector("#rows tr")) load();
+}
+
+// ── Objectenlijst: laadt door in porties en blijft staan ───────
+const LIJST_PORTIE = 200;
+let lijstPorties = 1;        // hoeveel porties nu geladen zijn
+let lijstEinde = false;      // alles geladen?
+let lijstBezig = false;
+
+function lijstUrl(offset) {
+  const p = new URLSearchParams({
+    city: document.getElementById("f-city").value,
+    source: document.getElementById("f-source").value,
+    min_score: document.getElementById("f-score").value,
+    sort: document.getElementById("f-sort").value,
+    focus: document.getElementById("f-focus")?.checked ? 1 : 0,
+    q: document.getElementById("f-q").value,
+    limit: LIJST_PORTIE, offset,
+  });
+  return "/api/opportunities?" + p.toString();
+}
+
+// Nieuwe data gevonden? Dan een hint in de tabbalk — de lijst zelf laten we
+// staan, zodat je niet je plek kwijtraakt terwijl je aan het kijken bent.
+let bekendTotaal = null;
+async function checkNieuweData() {
+  try {
+    const st = await (await fetch("/api/stats")).json();
+    const hint = document.getElementById("tab-hint");
+    if (bekendTotaal !== null && st.total !== bekendTotaal && hint) {
+      hint.innerHTML = `<span style="color:var(--accent)">${st.total - bekendTotaal > 0
+        ? "+" + (st.total - bekendTotaal) + " nieuwe objecten" : "lijst gewijzigd"}</span>
+        · <a href="#" onclick="verversLijst(); return false;">ververs</a>`;
+    }
+    bekendTotaal = st.total;
+  } catch (e) {}
+}
+
+async function verversLijst() {
+  const hint = document.getElementById("tab-hint");
+  if (hint) hint.textContent = "";
+  await load(true);          // zelfde aantal porties, zelfde plek
+  loadStats();
+}
+
+function lijstVoet() {
+  const el = document.getElementById("lijst-voet");
+  if (!el) return;
+  const n = Object.keys(rowsById).length;
+  el.innerHTML = lijstEinde
+    ? `<span class="muted" style="font-size:12px">Alle ${n} objecten van deze filters staan hieronder.</span>`
+    : `<button onclick="meerLaden()" ${lijstBezig ? "disabled" : ""}>${lijstBezig ? "laden…" : "Meer laden"}</button>
+       <span class="muted" style="font-size:12px">${n} objecten geladen</span>`;
+}
+
+async function meerLaden() {
+  if (lijstBezig || lijstEinde) return;
+  lijstBezig = true; lijstVoet();
+  try {
+    const rijen = await (await fetch(lijstUrl(lijstPorties * LIJST_PORTIE))).json();
+    if (rijen.length < LIJST_PORTIE) lijstEinde = true;
+    if (rijen.length) {
+      lijstPorties++;
+      rijen.forEach(r => rowsById[r.id] = r);
+      document.getElementById("rows").insertAdjacentHTML("beforeend", rijen.map(rijHtml).join(""));
+    }
+  } catch (e) { /* stil: de lijst blijft staan zoals hij was */ }
+  lijstBezig = false; lijstVoet();
+}
+
+// Onderaan de pagina automatisch bijladen (de lijst loopt dus door)
+window.addEventListener("scroll", () => {
+  if (hoofdtab !== "objecten" || lijstBezig || lijstEinde) return;
+  if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 600) meerLaden();
+});
+
+async function load(behoudPorties = false) {
   loadStats();
   await loadCityStats();
-  const city = document.getElementById("f-city").value;
-  const source = document.getElementById("f-source").value;
-  const q = document.getElementById("f-q").value;
-  const min = document.getElementById("f-score").value;
-  const sort = document.getElementById("f-sort").value;
-  const focus = document.getElementById("f-focus")?.checked ? 1 : 0;
-  const url = `/api/opportunities?city=${encodeURIComponent(city)}&source=${source}&min_score=${min}&sort=${sort}&focus=${focus}&q=${encodeURIComponent(q)}`;
-  const rows = await (await fetch(url)).json();
+  const porties = behoudPorties ? Math.max(1, lijstPorties) : 1;
+  const bewaardeScroll = behoudPorties ? window.scrollY : 0;
+  lijstEinde = false;
+  const rows = [];
+  for (let i = 0; i < porties; i++) {
+    const deel = await (await fetch(lijstUrl(i * LIJST_PORTIE))).json();
+    rows.push(...deel);
+    if (deel.length < LIJST_PORTIE) { lijstEinde = true; break; }
+  }
+  lijstPorties = Math.max(1, Math.ceil(rows.length / LIJST_PORTIE));
   rowsById = {};
   rows.forEach(r => rowsById[r.id] = r);
-  document.getElementById("rows").innerHTML = rows.map(r => {
-    const cls = r.flip_score >= 60 ? "s-hot" : r.flip_score >= 40 ? "s-warm" : "s-cool";
-    const cs = cityStats[(r.city || "").toLowerCase()];
+  document.getElementById("rows").innerHTML = rows.map(rijHtml).join("")
+    || `<tr><td colspan="13" class="muted" style="padding:30px;text-align:center">Geen objecten — verlaag de minimumscore, zet 'alleen focussteden' uit of start een scrape.</td></tr>`;
+  document.getElementById("lastupdate").textContent = "bijgewerkt " + new Date().toLocaleTimeString("nl-NL");
+  lijstVoet();
+  loadSources();
+  if (bewaardeScroll) window.scrollTo({ top: bewaardeScroll });
+}
+
+function rijHtml(r) {
+  const cls = r.flip_score >= 60 ? "s-hot" : r.flip_score >= 40 ? "s-warm" : "s-cool";
+  const cs = cityStats[(r.city || "").toLowerCase()];
     const drops = (r.price_history || []).filter(h => h.to < h.from).length;
     const flags = Object.entries(r.flags).filter(([,v]) => v)
       .map(([k]) => `<span class="chip on">${k.replace(/_/g," ")}</span>`).join("");
@@ -399,9 +538,6 @@ async function load() {
       <td><span class="badge-src ${auction ? "auction" : ""}">${r.source}</span>
           ${r.auction_date ? `<div class="muted" style="font-size:11px">${r.auction_date}</div>` : ""}</td>
     </tr>`;
-  }).join("") || '<tr><td colspan="13" class="muted" style="padding:30px;text-align:center">Geen objecten — verlaag de minimumscore of start een scrape.</td></tr>';
-  document.getElementById("lastupdate").textContent = "bijgewerkt " + new Date().toLocaleTimeString("nl-NL");
-  loadSources();
 }
 
 async function checkRunning() {
@@ -1223,8 +1359,8 @@ async function laatUitzoeken(id) {
 function openDeepLink() {
   const p = new URLSearchParams(location.search);
   const card = document.getElementById("agent-card");
-  if (p.get("spoor")) { toonLogboek({ listing_id: Number(p.get("spoor")) }); card && card.scrollIntoView(); }
-  else if (p.get("ronde")) { toonRonde(Number(p.get("ronde"))); card && card.scrollIntoView(); }
+  if (p.get("spoor")) { setHoofdtab("team"); toonLogboek({ listing_id: Number(p.get("spoor")) }); card && card.scrollIntoView(); }
+  else if (p.get("ronde")) { setHoofdtab("team"); toonRonde(Number(p.get("ronde"))); card && card.scrollIntoView(); }
 }
 
 // Volledig verslag van het agent-team onder een object.
@@ -1743,13 +1879,15 @@ async function refreshSold() {
   setTimeout(loadBenchmarks, 60000);
 }
 
-load();
-loadProfiles().then(loadTop5);
-loadBenchmarks();
+// Start op het tabblad waar je gebleven was
+try { hoofdtab = localStorage.getItem("dr-hoofdtab") || "objecten"; } catch (e) {}
+setHoofdtab(new URLSearchParams(location.search).get("tab") || hoofdtab);
+loadProfiles();
 checkRunning();
-setInterval(load, 120000);
-setInterval(loadBenchmarks, 300000);
 setInterval(checkRunning, 15000);
+// De lijst wordt niet meer automatisch gewist: hij blijft staan waar je was.
+// Komt er nieuwe data (scrape of agent-ronde), dan verschijnt er een hint.
+setInterval(checkNieuweData, 120000);
 </script>
 
 <script>
@@ -1779,7 +1917,6 @@ checkRunning();
 setInterval(checkRunning, 10000);
 loadAgentStatus();
 setInterval(loadAgentStatus, 120000);
-loadAgentPanel();
 setTimeout(openDeepLink, 1200);
 </script>
 </body>
