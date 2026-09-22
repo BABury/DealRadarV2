@@ -21,7 +21,9 @@ _refresh_lock = threading.Lock()
 _run_state = {"running": False, "started": None, "last_report": None}
 
 
-def _run_scrape(sources: list[str] | None = None) -> dict:
+def _run_scrape(sources: list[str] | None = None,
+                funda_steden: list[str] | None = None,
+                funda_budget: int | None = None) -> dict:
     import datetime as dt
     from .scrapers import run_all
     if not _refresh_lock.acquire(blocking=False):
@@ -29,7 +31,7 @@ def _run_scrape(sources: list[str] | None = None) -> dict:
     _run_state["running"] = True
     _run_state["started"] = dt.datetime.utcnow().isoformat()
     try:
-        report = run_all(sources)
+        report = run_all(sources, funda_steden=funda_steden, funda_budget=funda_budget)
         _run_state["last_report"] = report
         return report
     finally:
@@ -436,10 +438,20 @@ def source_status():
 
 
 @app.post("/api/refresh")
-def refresh(source: str = Query(default="")):
+def refresh(source: str = Query(default=""),
+            cities: str = Query(default=""),
+            budget: int = Query(default=0, le=400)):
+    """Scrape starten. `cities` = nu precies deze steden (geen rotatie), bv.
+    cities=amsterdam,eindhoven; `budget` = pagina's voor deze run (Funda
+    blokkeert op tempo, dus houd het onder ±200 per half uur)."""
     sources = [source] if source else None
-    threading.Thread(target=_run_scrape, args=(sources,), daemon=True).start()
-    return {"status": "gestart", "sources": sources or "alle"}
+    steden = [c.strip() for c in cities.split(",") if c.strip()] or None
+    if steden and not sources:
+        sources = ["funda"]
+    threading.Thread(target=_run_scrape, args=(sources, steden, budget or None),
+                     daemon=True).start()
+    return {"status": "gestart", "sources": sources or "alle",
+            "steden": steden or "volgens rotatie", "budget": budget or "standaard"}
 
 
 @app.post("/api/quickscan")

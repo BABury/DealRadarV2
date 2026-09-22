@@ -479,7 +479,8 @@ def parse_card(href: str, tekst: str) -> dict | None:
     }
 
 
-def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
+def scrape_funda_browser(sink=None, on_total=None, steden: list[str] | None = None,
+                         budget_override: int | None = None) -> list[dict]:
     """Scrape woningaanbod per stad via de browser — in twee trappen.
 
     1. ZOEKPAGINA'S: elk kaartje (15 per pagina) levert prijs, m², perceel,
@@ -491,7 +492,7 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
     Alles telt mee in één paginabudget per run."""
     max_price = int(os.getenv("FUNDA_MAX_PRICE", "10000000"))   # geen plafond (splitsdoel)
     max_pages = int(os.getenv("FUNDA_MAX_PAGES", "40"))          # zoekpagina's per stad
-    budget = int(os.getenv("FUNDA_PAGE_BUDGET", "110"))          # pagina's per run (alle steden)
+    budget = budget_override or int(os.getenv("FUNDA_PAGE_BUDGET", "110"))   # pagina's per run
     max_details = _max_details()                                 # detailpagina's per stad
     stad_timeout = float(os.getenv("SCRAPE_CITY_TIMEOUT", "900"))
 
@@ -505,13 +506,20 @@ def scrape_funda_browser(sink=None, on_total=None) -> list[dict]:
             (Listing.omschrijving.is_(None)) | (Listing.omschrijving == "")) if u}
     print(f"[funda-browser] {len(bekend)} objecten al bekend", flush=True)
 
-    cities = _cities()
-    # Automatisch ook de steden van splitsbare veilingkandidaten zonder marktdata
-    extra = _veiling_steden(cities)
-    if extra:
-        print(f"[funda-browser] + veilingsteden voor marktprijzen: {', '.join(extra)}", flush=True)
-        cities = cities + extra
-    cities = _rotatie(cities)
+    if steden:
+        # Handmatige opdracht ("scrape nu Amsterdam en Eindhoven"): geen rotatie,
+        # precies deze steden, en ruimer paginabudget zodat ze compleet worden.
+        cities = [_slug(c) for c in steden if c and c.strip()]
+        print(f"[funda-browser] opdracht: alleen {', '.join(cities)} "
+              f"(budget {budget} pagina's)", flush=True)
+    else:
+        cities = _cities()
+        # Automatisch ook de steden van splitsbare veilingkandidaten zonder marktdata
+        extra = _veiling_steden(cities)
+        if extra:
+            print(f"[funda-browser] + veilingsteden voor marktprijzen: {', '.join(extra)}", flush=True)
+            cities = cities + extra
+        cities = _rotatie(cities)
     if on_total:
         on_total(len(cities))
 

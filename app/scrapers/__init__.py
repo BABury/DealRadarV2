@@ -25,7 +25,8 @@ PROGRESS: dict = {}
 _lock = threading.Lock()
 
 
-def run_all(sources=None) -> dict:
+def run_all(sources=None, funda_steden: list[str] | None = None,
+            funda_budget: int | None = None) -> dict:
     report: dict = {}
     with _lock:
         PROGRESS.clear()
@@ -64,7 +65,11 @@ def run_all(sources=None) -> dict:
         scraper = (scrape_funda if os.getenv("FUNDA_METHOD", "browser") == "api"
                    else scrape_funda_browser)
         try:
-            all_items = scraper(sink=sink, on_total=set_total)
+            if funda_steden and scraper is scrape_funda_browser:
+                all_items = scraper(sink=sink, on_total=set_total, steden=funda_steden,
+                                    budget_override=funda_budget)
+            else:
+                all_items = scraper(sink=sink, on_total=set_total)
             status = "ok" if fu["ok_cities"] > 0 else "error"
             msg = "" if status == "ok" else "Alle steden geblokkeerd (403) - zet SCRAPER_PROXY."
             log_run("funda", status, found=len(all_items), new=fu["new"], message=msg)
