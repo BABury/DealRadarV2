@@ -38,14 +38,19 @@ KEYWORD_FLAGS = {
     # Onbenutte ruimte boven in het pand: de vliering/bergzolder die nu als
     # berging wordt gebruikt en waar een compleet appartement in past. Dit is
     # de duurste vierkante meter die je bijna gratis koopt.
+    # Alleen woorden die op ONBENUTTE ruimte wijzen. "Ruime zolder" en
+    # "zolderverdieping" stonden hier eerst ook in, maar die staan in de halve
+    # markt en leverden 200 valse treffers op: een afgewerkte zolderkamer is
+    # al meegeteld in het woonoppervlak en dus geen kans.
     "flag_vliering": ["vliering", "bergvliering", "bergzolder", "zolderberging",
                       "bergingzolder", "berging op zolder", "zolder met berging",
                       "bergruimte op zolder", "kapverdieping", "kapzolder",
                       "onbenutte ruimte", "onbenutte zolder", "ongebruikte zolder",
-                      "ruime zolder", "grote zolder", "royale zolder", "zolderetage",
-                      "zolderverdieping", "te gebruiken als berging",
-                      "thans in gebruik als berging", "in gebruik als berging",
-                      "gemeenschappelijke zolder", "vide"],
+                      "onbenutte vliering", "te gebruiken als berging",
+                      "in gebruik als berging", "als berging in gebruik",
+                      "dient als berging", "thans als berging",
+                      "gemeenschappelijke zolder", "zolder als berging",
+                      "onbenut", "niet in gebruik"],
 }
 
 _MAINTENANCE = [
