@@ -375,7 +375,12 @@ def diagnose_detail(url: str | None = None) -> dict:
     oms = det.get("omschrijving") or ""
     return {"ok": len(oms) >= 200, "url": url, "bron": det.get("omschrijving_bron") or "niets gevonden",
             "lengte": len(oms), "begin": oms[:400], "kenmerken": len(det.get("kenmerken") or {}),
-            "h1": (det.get("h1") or "")[:120], "seconden": round(time.time() - t0, 1)}
+            "h1": (det.get("h1") or "")[:120], "seconden": round(time.time() - t0, 1),
+            # De namen van de kenmerken erbij: alleen zo kun je nagaan of de
+            # parser de juiste veldnaam gebruikt ("Overige inpandige ruimte").
+            "kenmerk_namen": {k: str(v)[:60] for k, v in (det.get("kenmerken") or {}).items()},
+            "oppervlakten": {k: str(v)[:60] for k, v in (det.get("kenmerken") or {}).items()
+                             if re.search(r"opperv|inhoud|wonen|perceel|ruimte|berg", k, re.I)}}
 
 
 def _slug(city: str) -> str:
