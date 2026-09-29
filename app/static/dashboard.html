@@ -156,6 +156,7 @@
 <div class="wrap">
   <nav class="hoofdtabs">
     <button class="ht" data-t="objecten" onclick="setHoofdtab('objecten')">🏠 Objecten</button>
+    <button class="ht" data-t="vliering" onclick="setHoofdtab('vliering')">🏚 Vliering</button>
     <button class="ht" data-t="prijzen" onclick="setHoofdtab('prijzen')">📊 Verkoopprijzen</button>
     <button class="ht" data-t="team" onclick="setHoofdtab('team')">🤖 Agent-team</button>
     <button class="ht" data-t="kansen" onclick="setHoofdtab('kansen')">🏆 Top-kansen</button>
@@ -209,6 +210,27 @@
 
   <div id="srcstatus"></div>
 </section>
+
+  <section class="paneel" id="paneel-vliering" hidden>
+    <h2>🏚 Onbenutte ruimte boven</h2>
+    <p class="muted">Panden waar een vliering, bergzolder of kapverdieping in de
+      omschrijving staat, of waar Funda losse inpandige ruimte opgeeft. Die ruimte telt
+      nu niet mee in de vraagprijs, maar er past een compleet appartement in.
+      <b>De zin uit de omschrijving staat erbij</b>, zodat je zelf beoordeelt of het
+      een echte verdieping is of een kruipruimte met een vlizotrap.</p>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 14px">
+      <button onclick="loadVliering()">🔄 Vernieuwen</button>
+      <button onclick="herleesOmschrijvingen()">🔁 Omschrijvingen opnieuw lezen</button>
+      <select id="vl-stad" onchange="loadVliering()">
+        <option value="">alle focussteden</option>
+        <option value="amsterdam">Amsterdam</option>
+        <option value="rotterdam">Rotterdam</option>
+        <option value="eindhoven">Eindhoven</option>
+      </select>
+    </div>
+    <div id="vl-status" class="muted"></div>
+    <div id="vl-lijst"></div>
+  </section>
 
   <section class="paneel" id="paneel-prijzen" hidden>
 <div class="card" style="margin-bottom:18px;" id="bench-card">
@@ -394,9 +416,9 @@ async function loadStats() {
 }
 
 // ── Hoofdtabs: één onderwerp per keer, in vaste volgorde ──────
-const HOOFDTABS = ["objecten", "prijzen", "team", "kansen", "analyse"];
+const HOOFDTABS = ["objecten", "vliering", "prijzen", "team", "kansen", "analyse"];
 let hoofdtab = "objecten";
-const geladen = { prijzen: false, kansen: false, team: false };
+const geladen = { prijzen: false, kansen: false, team: false, vliering: false };
 
 function setHoofdtab(naam) {
   if (!HOOFDTABS.includes(naam)) naam = "objecten";
@@ -411,6 +433,7 @@ function setHoofdtab(naam) {
   if (naam === "prijzen" && !geladen.prijzen) { geladen.prijzen = true; loadBenchmarks(); }
   if (naam === "kansen" && !geladen.kansen) { geladen.kansen = true; loadTop5(); }
   if (naam === "team" && !geladen.team) { geladen.team = true; loadAgentPanel(); }
+  if (naam === "vliering" && !geladen.vliering) { geladen.vliering = true; loadVliering(); }
   if (naam === "objecten" && !document.querySelector("#rows tr")) load();
 }
 
@@ -1893,6 +1916,72 @@ async function refreshSold() {
 }
 
 // Start op het tabblad waar je gebleven was
+// ── Vliering: onbenutte ruimte boven ──────────────────────────
+async function loadVliering() {
+  const stad = document.getElementById("vl-stad").value;
+  const status = document.getElementById("vl-status");
+  const doel = document.getElementById("vl-lijst");
+  status.textContent = "Bezig met ophalen…";
+  doel.innerHTML = "";
+  try {
+    const [tr, obj] = await Promise.all([
+      fetch("/api/vliering-treffers?limit=200" + (stad ? "&city=" + stad : "")).then(r => r.json()),
+      fetch("/api/opportunities?vliering=1&limit=300" + (stad ? "&city=" + stad : "")).then(r => r.json()),
+    ]);
+    // De m²-getallen en het rekenwerk komen uit de objectenlijst, de zinnen
+    // uit de treffers. Op id samenvoegen zodat je allebei ziet.
+    const perId = {};
+    (Array.isArray(obj) ? obj : []).forEach(o => { perId[o.id] = o; });
+    const rijen = (tr.objecten || []).map(t => ({ ...t, obj: perId[t.id] || null }));
+    (Array.isArray(obj) ? obj : []).forEach(o => {
+      if (!rijen.some(r => r.id === o.id) && (o.overige_inpandig || 0) > 0)
+        rijen.push({ id: o.id, adres: o.address, stad: o.city, prijs: o.price,
+                     m2: o.living_area, onbenut_m2: o.overige_inpandig,
+                     score: o.flip_score, url: o.url, treffers: [], obj: o });
+    });
+    rijen.sort((a, b) => ((b.obj && b.obj.vliering ? b.obj.vliering.netto : 0) || 0)
+                       - ((a.obj && a.obj.vliering ? a.obj.vliering.netto : 0) || 0)
+                       || (b.onbenut_m2 || 0) - (a.onbenut_m2 || 0)
+                       || (b.score || 0) - (a.score || 0));
+    const metGetal = rijen.filter(r => (r.onbenut_m2 || 0) > 0).length;
+    status.innerHTML = `<b>${rijen.length}</b> panden · ${metGetal} met een opgegeven
+      m²-getal van Funda · de rest alleen op basis van de omschrijving.
+      ${metGetal < rijen.length ? "Het getal komt binnen bij nieuwe detailpagina's." : ""}`;
+    if (!rijen.length) { doel.innerHTML = "<p class='muted'>Nog niets gevonden.</p>"; return; }
+    doel.innerHTML = rijen.map(r => {
+      const v = r.obj && r.obj.vliering;
+      const zinnen = (r.treffers || []).map(t =>
+        `<div class="muted" style="margin:4px 0 0">${esc(t)}</div>`).join("");
+      const som = v ? `<div style="margin-top:6px"><b>${v.extra_m2} m²</b> × ${fmt(v.waarde_per_m2)}/m²
+          = ${fmt(v.bruto)} − verbouw ${fmt(v.verbouw)} − vast ${fmt(v.vaste_kosten)}
+          → <b style="color:var(--accent2)">netto ${fmt(v.netto)}</b></div>` : "";
+      return `<div class="card" style="margin:0 0 10px; padding:12px 14px">
+        <div><b>${esc(r.adres || "")}</b>, ${esc(r.stad || "")} ·
+          ${fmt(r.prijs)} · ${Math.round(r.m2 || 0)} m² wonen
+          ${r.onbenut_m2 ? `· <b style="color:var(--accent2)">${Math.round(r.onbenut_m2)} m² onbenut</b>` : ""}
+          · score ${r.score || 0}
+          ${r.url ? ` · <a href="${esc(r.url)}" target="_blank" rel="noopener">Funda</a>` : ""}
+        </div>${zinnen}${som}
+        <button style="margin-top:8px; font-size:11px; padding:3px 8px" id="ond-knop-${r.id}"
+          onclick="laatUitzoeken(${r.id})">🔍 Laat het team dit uitzoeken</button>
+        <div id="ond-status-${r.id}" style="font-size:12px"></div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    status.textContent = "Ophalen mislukt: " + e;
+  }
+}
+
+async function herleesOmschrijvingen() {
+  const status = document.getElementById("vl-status");
+  status.textContent = "Alle opgeslagen omschrijvingen opnieuw lezen…";
+  try {
+    const r = await fetch("/api/herlees-omschrijvingen", { method: "POST" }).then(r => r.json());
+    status.textContent = `${r.gelezen} omschrijvingen gelezen, ${r.bijgewerkt} bijgewerkt.`;
+    loadVliering();
+  } catch (e) { status.textContent = "Mislukt: " + e; }
+}
+
 try { hoofdtab = localStorage.getItem("dr-hoofdtab") || "objecten"; } catch (e) {}
 setHoofdtab(new URLSearchParams(location.search).get("tab") || hoofdtab);
 loadProfiles();
