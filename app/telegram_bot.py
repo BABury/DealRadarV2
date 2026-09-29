@@ -216,6 +216,13 @@ def zet_instelling(rest: str) -> str:
     if sleutel == "steden":
         return zet_steden(waarde)
     std = STANDAARD[sleutel]
+    if isinstance(std, list):
+        lijst = [x.strip().lower() for x in waarde.replace(";", ",").replace(" ", ",").split(",")
+                 if x.strip()]
+        if not lijst:
+            return f"Geef een waarde, bijvoorbeeld <code>/zet {sleutel} house,apartment</code>."
+        opslaan({sleutel: lijst})
+        return f"✅ <code>{_e(sleutel)}</code> staat nu op <b>{', '.join(lees()[sleutel])}</b>."
     try:
         if isinstance(std, bool):
             nieuw = waarde.lower() in ("1", "aan", "true", "ja", "on")
@@ -400,6 +407,19 @@ def verwerk(update: dict, start_onderzoek, start_ronde, start_scrape=None) -> No
         compute_scores()
         stuur(f"🔁 {n} omschrijvingen opnieuw gelezen, <b>{bij}</b> bijgewerkt. "
               "Stuur /vliering voor het resultaat.")
+        return
+    if laag.startswith("/alles"):
+        from .agents.instellingen import opslaan, stad
+        opslaan({"funda_object_types": ["house", "apartment"], "funda_min_m2": 0,
+                 "funda_details_per_stad": 40, "funda_steden_per_run": 1})
+        rest = tekst[len("/alles"):].strip()
+        doel = [stad(x) for x in rest.replace(";", ",").split(",") if x.strip()]
+        stuur("🔓 Filters uit: huizen <b>én</b> appartementen, geen ondergrens in m².\n"
+              + (f"Ik begin aan <b>{', '.join(doel)}</b>. " if doel else "")
+              + "Dit is veel meer aanbod, dus het gaat in porties — Funda blokkeert op tempo. "
+                "Stuur dit commando nog eens om de volgende portie te doen.")
+        if start_scrape is not None:
+            threading.Thread(target=start_scrape, args=(doel or None, 150), daemon=True).start()
         return
     if laag.startswith("/instellingen"):
         stuur(instellingen_tekst())

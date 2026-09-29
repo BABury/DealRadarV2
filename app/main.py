@@ -476,6 +476,51 @@ def refresh(source: str = Query(default=""),
             "steden": steden or "volgens rotatie", "budget": budget or "standaard"}
 
 
+@app.get("/api/vliering-treffers")
+def vliering_treffers(city: str = Query(default=""), limit: int = Query(default=100, le=500)):
+    """Objecten waar de omschrijving over een berging of vliering gaat — mét
+    de zin die de treffer veroorzaakte.
+
+    Een vlag zonder bewijs is niet te vertrouwen: zo kun je zelf zien of het
+    echt om onbenutte ruimte gaat of om een gewone bergingskast."""
+    import re as _re
+    from .keywords import KEYWORD_FLAGS
+    woorden = KEYWORD_FLAGS["flag_vliering"]
+    uit = []
+    with SessionLocal() as s:
+        qry = s.query(Listing).filter(Listing.omschrijving.isnot(None),
+                                      Listing.omschrijving != "")
+        if city:
+            qry = qry.filter(func.lower(Listing.city) == city.lower())
+        else:
+            from .agents.instellingen import focus_varianten
+            qry = qry.filter(func.lower(func.trim(Listing.city)).in_(sorted(focus_varianten())))
+        for r in qry.order_by(desc(Listing.flip_score)).all():
+            tekst = r.omschrijving or ""
+            laag = tekst.lower()
+            zinnen = []
+            for w in woorden:
+                i = laag.find(w)
+                if i == -1:
+                    continue
+                start = max(0, tekst.rfind(".", 0, i) + 1)
+                eind = tekst.find(".", i)
+                zin = tekst[start:(eind + 1 if eind != -1 else min(len(tekst), i + 200))]
+                zin = _re.sub(r"\s+", " ", zin).strip()
+                if zin and zin not in zinnen:
+                    zinnen.append(f"[{w}] {zin[:240]}")
+                if len(zinnen) >= 3:
+                    break
+            if zinnen:
+                uit.append({"id": r.id, "adres": r.address, "stad": r.city,
+                            "prijs": r.price, "m2": r.living_area,
+                            "onbenut_m2": r.overige_inpandig, "score": r.flip_score,
+                            "url": r.url, "treffers": zinnen})
+            if len(uit) >= limit:
+                break
+    return {"aantal": len(uit), "objecten": uit}
+
+
 @app.post("/api/herlees-omschrijvingen")
 def herlees_omschrijvingen():
     """Bestaande omschrijvingen opnieuw door de trefwoorden halen.

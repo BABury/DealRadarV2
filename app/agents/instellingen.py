@@ -47,6 +47,13 @@ STANDAARD = {
     # Funda: detailpagina's (= omschrijving voor Lotte) per stad per run.
     # Meer = meer tekst, maar ook meer pagina's richting Funda's tempogrens.
     "funda_details_per_stad": 12,
+    # Wat de scraper op Funda ophaalt. Stond eerst vast in Railway-variabelen:
+    # alleen huizen vanaf 110 m², omdat je een appartement niet splitst. Voor
+    # de vliering-strategie klopt dat niet meer — een bovenwoning met een
+    # gemeenschappelijke zolder is juist de klassieke Amsterdamse kans.
+    # Leeg getal 0 = geen ondergrens; "house,apartment" = allebei.
+    "funda_object_types": ["house"],
+    "funda_min_m2": 110,
     # Hoeveel focussteden per run; de rest komt de volgende run (om en om).
     # Funda blokkeert op tempo (±200 pagina's per half uur), niet op IP.
     "funda_steden_per_run": 2,
@@ -73,6 +80,7 @@ GRENZEN = {
     "kees_top_n": (0, 15),
     "funda_details_per_stad": (0, 60),
     "funda_steden_per_run": (1, 12),
+    "funda_min_m2": (0, 1000),
     "vliering_min_m2": (5.0, 200.0),
     "vliering_verbouw_eur_m2": (500.0, 5000.0),
     "vliering_vaste_kosten": (0.0, 250000.0),

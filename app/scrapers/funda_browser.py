@@ -61,8 +61,16 @@ def _max_details() -> int:
 def search_url(city: str, max_price: int, page: int = 1, sort_new: bool = True) -> str:
     # Splitsstrategie: standaard alleen HUIZEN (een appartement splits je niet)
     # en pas vanaf een oppervlak waar 2 appartementen in passen.
-    types = [t.strip() for t in os.getenv("FUNDA_OBJECT_TYPES", "house").split(",") if t.strip()]
-    min_m2 = int(os.getenv("FUNDA_MIN_M2", "110"))
+    # Het dashboard (en Telegram) wint van de Railway-variabelen: anders zit
+    # je met een instelling vast die je onderweg niet kunt wijzigen.
+    try:
+        from ..agents.instellingen import lees as _lees
+        ins = _lees()
+        types = list(ins["funda_object_types"]) or ["house"]
+        min_m2 = int(ins["funda_min_m2"])
+    except Exception:
+        types = [t.strip() for t in os.getenv("FUNDA_OBJECT_TYPES", "house").split(",") if t.strip()]
+        min_m2 = int(os.getenv("FUNDA_MIN_M2", "110"))
     q = {
         "selected_area": f'["{_slug(city)}"]',
         "price": f'"0-{max_price}"',
