@@ -53,6 +53,45 @@ KEYWORD_FLAGS = {
                       "onbenut", "niet in gebruik"],
 }
 
+# Eerste live meting leerde dat het woord alleen niets zegt. "Toegang tot de
+# vliering middels de vlizotrap" is een kruipruimte; "vierde verdieping /
+# vliering boven de derde verdieping" is een appartement. Het verschil zit in
+# de zin eromheen, dus die wegen we mee.
+VLIERING_ZWAK = ["vlizotrap", "vlizo", "kruipruimte", "bergkast", "bergingskast",
+                 "kleine vliering", "kleine bergvliering", "praktische vliering",
+                 "beperkte stahoogte", "geen stahoogte", "lage vliering",
+                 "kleine zolder", "zolderkast"]
+
+VLIERING_STERK = ["vaste trap", "gehele verdieping", "hele verdieping",
+                  "volledige verdieping", "eigen opgang", "eigen entree",
+                  "vierde verdieping", "derde verdieping", "goede stahoogte",
+                  "ruime stahoogte", "vrije hoogte", "dakkapel", "dakraam",
+                  "te verbouwen", "extra verdieping", "plafondhoogte",
+                  "gemeenschappelijke zolder", "in gebruik als berging"]
+
+
+def _vliering_echt(tekst: str, woorden: list[str]) -> bool:
+    """Gaat deze treffer over ruimte waar een woning in past?
+
+    We kijken naar de zin waarin het woord staat. Staat daar een vlizotrap of
+    'kleine' in, en niets dat op een volwaardige verdieping wijst, dan is het
+    geen kans en houden we de vlag leeg. Liever tien echte treffers dan
+    tweehonderd waar je doorheen moet klikken.
+    """
+    laag = (tekst or "").lower()
+    gezien = False
+    for w in woorden:
+        if w not in laag:
+            continue
+        gezien = True
+        zin = _context(tekst, w, 260).lower()
+        if any(st in zin for st in VLIERING_STERK):
+            return True
+        if not any(zw in zin for zw in VLIERING_ZWAK):
+            return True
+    return False if gezien else False
+
+
 _MAINTENANCE = [
     (["slechte staat", "slecht onderhoud", "achterstallig onderhoud", "casco"], "Slecht"),
     (["matige staat", "matig onderhoud", "enig achterstallig", "opknapper"], "Matig"),
@@ -84,6 +123,10 @@ def analyse_description(text: str) -> dict:
             snip = _context(text, hit)
             if snip:
                 snippets.append(snip)
+    # De vliering verdient een strengere blik dan een simpele woordtreffer.
+    if out.get("flag_vliering"):
+        out["flag_vliering"] = _vliering_echt(text, KEYWORD_FLAGS["flag_vliering"])
+
     out["context"] = " | ".join(dict.fromkeys(snippets))[:600]
 
     out["maintenance"] = ""
