@@ -535,11 +535,19 @@ def scrape_funda_browser(sink=None, on_total=None, steden: list[str] | None = No
     from ..db import Listing, SessionLocal
     with SessionLocal() as s:
         bekend = {u for (u,) in s.query(Listing.url).filter(Listing.source == "funda") if u}
-        # Bekende huizen zónder omschrijving: die verdienen ook een detailpagina,
-        # anders krijgt een huis dat ooit als kaartje binnenkwam nooit tekst.
-        zonder_tekst = {u for (u,) in s.query(Listing.url).filter(
+        # Welke bekende objecten verdienen (opnieuw) een detailpagina?
+        #  - geen omschrijving: die kwam ooit als kaartje binnen en heeft nooit
+        #    tekst gekregen;
+        #  - geen inhoud in m³: dan is de pagina opgehaald vóór v25, toen we de
+        #    oppervlakten nog niet uitlazen. Inhoud staat op vrijwel elke
+        #    Funda-detailpagina, dus een lege waarde betekent: nog niet gemeten.
+        # Zonder die tweede regel blijven honderden objecten eeuwig ongemeten,
+        # omdat ze wél een omschrijving hebben (gemeten 29 sept 2026: vier
+        # rondes leverden maar 41 nieuwe detailpagina's op i.p.v. 480).
+        nog_te_meten = {u for (u,) in s.query(Listing.url).filter(
             Listing.source == "funda",
-            (Listing.omschrijving.is_(None)) | (Listing.omschrijving == "")) if u}
+            (Listing.omschrijving.is_(None)) | (Listing.omschrijving == "")
+            | (Listing.inhoud_m3.is_(None))) if u}
     print(f"[funda-browser] {len(bekend)} objecten al bekend", flush=True)
 
     if steden:
@@ -616,7 +624,7 @@ def scrape_funda_browser(sink=None, on_total=None, steden: list[str] | None = No
                 # Nieuwe huizen én bekende huizen die nog geen omschrijving
                 # hebben; goedkoopste €/m² eerst, hooguit max_details per stad.
                 kandidaten = nieuwe + [k for u, k in per_url.items()
-                                       if k.get("_update_only") and u in zonder_tekst]
+                                       if k.get("_update_only") and u in nog_te_meten]
                 kandidaten.sort(key=lambda k: k.get("price_m2") or 10 ** 9)
                 ruimte = max(0, min(max_details, stad_budget - pagina))
                 for k in kandidaten[:ruimte]:
@@ -630,7 +638,7 @@ def scrape_funda_browser(sink=None, on_total=None, steden: list[str] | None = No
                             vol = {**{a: b for a, b in k.items() if a != "_update_only"},
                                    **{a: b for a, b in d.items() if b not in (None, "")}}
                             per_url[k["url"]] = vol
-                            zonder_tekst.discard(k["url"])
+                            nog_te_meten.discard(k["url"])
             except Exception as e:
                 status = "error"
                 print(f"[funda-browser] {city} fout: {str(e)[:120]}", flush=True)
