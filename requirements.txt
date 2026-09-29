@@ -1,7 +1,11 @@
 fastapi>=0.111
 uvicorn[standard]>=0.30
-sqlalchemy>=2.0
+sqlalchemy>=2.0,<2.2
+# Twee drivers met opzet: SQLAlchemy koos tot 2.0 psycopg2 voor een
+# postgresql://-adres en vanaf 2.1 psycopg 3. Met allebei erin maakt het
+# niet uit welke versie de build binnenhaalt.
 psycopg2-binary>=2.9
+psycopg[binary]>=3.1
 apscheduler>=3.10
 requests>=2.31
 beautifulsoup4>=4.12
