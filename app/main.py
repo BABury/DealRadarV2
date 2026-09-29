@@ -10,7 +10,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_
 
 from .db import Listing, ScrapeRun, SessionLocal, init_db
 from .scoring import compute_scores
@@ -30,6 +30,8 @@ def _run_scrape(sources: list[str] | None = None,
         return {"status": "al bezig"}
     _run_state["running"] = True
     _run_state["started"] = dt.datetime.utcnow().isoformat()
+    from .scrapers.stop import stop_wissen
+    stop_wissen()
     try:
         report = run_all(sources, funda_steden=funda_steden, funda_budget=funda_budget)
         _run_state["last_report"] = report
@@ -260,6 +262,7 @@ def opportunities(
     q: str = Query(default=""),
     sort: str = Query(default="score"),
     focus: int = Query(default=1),
+    vliering: int = Query(default=0),
     limit: int = Query(default=200, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
@@ -277,12 +280,31 @@ def opportunities(
             qry = qry.filter(Listing.flip_score >= min_score)
         if q:
             qry = qry.filter(Listing.address.ilike(f"%{q}%"))
+        if vliering:
+            # Alleen panden met onbenutte ruimte boven: opgegeven inpandige
+            # ruimte, of een makelaar die het woord noemt.
+            from .agents.instellingen import lees as _lees_ins
+            drempel = _lees_ins()["vliering_min_m2"]
+            qry = qry.filter(or_(Listing.overige_inpandig >= drempel,
+                                 Listing.flag_vliering.is_(True)))
         # score (standaard) | nieuw = laatst gevonden eerst | oud = langst in de lijst
         volgorde = {"nieuw": desc(Listing.first_seen),
                     "oud": Listing.first_seen.asc()}.get(sort, desc(Listing.flip_score))
         # offset: de lijst in het dashboard laadt in porties door
         rows = qry.order_by(volgorde).offset(offset).limit(limit).all()
-        return [r.to_dict() for r in rows]
+        uit = [r.to_dict() for r in rows]
+        try:
+            from .scenarios import city_medians_all
+            from .vliering import bereken
+            from .agents.instellingen import lees as _lees_ins, stad as _stad
+            medianen, ins = city_medians_all(), _lees_ins()
+            for d in uit:
+                v = bereken(d, medianen.get(_stad(d.get("city"))), ins)
+                if v:
+                    d["vliering"] = v
+        except Exception as e:
+            print(f"[vliering] berekening overgeslagen: {e}", flush=True)
+        return uit
 
 
 @app.get("/api/stats")
@@ -452,6 +474,43 @@ def refresh(source: str = Query(default=""),
                      daemon=True).start()
     return {"status": "gestart", "sources": sources or "alle",
             "steden": steden or "volgens rotatie", "budget": budget or "standaard"}
+
+
+@app.post("/api/herlees-omschrijvingen")
+def herlees_omschrijvingen():
+    """Bestaande omschrijvingen opnieuw door de trefwoorden halen.
+
+    Nieuwe trefwoorden (zoals de vliering) werken anders pas nadat een object
+    opnieuw is gescraped, en dat duurt weken. De volledige tekst staat al in
+    de database, dus dit kost niets en levert meteen resultaat."""
+    from .keywords import analyse_description
+    geraakt, bijgewerkt = 0, 0
+    with SessionLocal() as s:
+        rijen = s.query(Listing).filter(Listing.omschrijving.isnot(None),
+                                        Listing.omschrijving != "").all()
+        for r in rijen:
+            geraakt += 1
+            an = analyse_description(r.omschrijving or "")
+            veranderd = False
+            for k, v in an.items():
+                if k.startswith("flag_") and hasattr(r, k) and getattr(r, k) != v:
+                    setattr(r, k, v)
+                    veranderd = True
+            if veranderd:
+                bijgewerkt += 1
+        s.commit()
+    compute_scores()
+    return {"status": "ok", "gelezen": geraakt, "bijgewerkt": bijgewerkt}
+
+
+@app.post("/api/scrape/stop")
+def scrape_stop():
+    """Stopknop voor een lopende scrape: de pagina die onderweg is wordt
+    afgemaakt, daarna stopt hij. Nooit hard afbreken — dan blijft er een
+    browser hangen."""
+    from .scrapers.stop import stop_aanvragen
+    stop_aanvragen()
+    return {"status": "stop gevraagd", "was_bezig": _run_state["running"]}
 
 
 @app.post("/api/quickscan")
@@ -808,6 +867,25 @@ def _ronde_via_telegram() -> None:
           + (f" · <a href=\"{url}/?ronde={r.get('ronde_id')}\">wat veranderde er</a>" if url else ""))
 
 
+def _scrape_via_telegram(steden: list[str] | None = None,
+                         budget: int | None = None) -> None:
+    """Scrape gestart vanaf je telefoon: draaien en daarna terugmelden."""
+    from .telegram_bot import stuur
+    rapport = _run_scrape(["funda"], funda_steden=steden, funda_budget=budget)
+    try:
+        f = (rapport or {}).get("funda") or {}
+        if (rapport or {}).get("status") == "al bezig":
+            stuur("⏳ Er liep al een scrape; deze opdracht is overgeslagen.")
+            return
+        from .scrapers.stop import stop_gevraagd
+        kop = "⏹ Scrape gestopt" if stop_gevraagd() else "✅ Scrape klaar"
+        stuur(f"{kop}\n{f.get('found', 0)} objecten gezien, <b>{f.get('new', 0)} nieuw</b> "
+              f"in {f.get('ok_cities', 0)} van de {f.get('cities', 0)} steden.\n"
+              "Stuur /kansen of /vliering om te zien wat het opleverde.")
+    except Exception as e:
+        print(f"[telegram] terugmelding mislukt: {e}", flush=True)
+
+
 @app.post("/api/telegram/webhook")
 async def telegram_webhook(request: Request):
     """Berichten van Telegram. Zonder het juiste geheim: genegeerd."""
@@ -818,7 +896,8 @@ async def telegram_webhook(request: Request):
         update = await request.json()
     except Exception:
         return {"ok": True}
-    threading.Thread(target=verwerk, args=(update, _run_onderzoek, _ronde_via_telegram),
+    threading.Thread(target=verwerk,
+                     args=(update, _run_onderzoek, _ronde_via_telegram, _scrape_via_telegram),
                      daemon=True).start()
     return {"ok": True}        # meteen antwoorden; Telegram probeert anders opnieuw
 

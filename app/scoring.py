@@ -78,8 +78,28 @@ def score_listing(l: Listing, bm: BenchmarkMap) -> tuple[int, list[str], dict]:
     if l.flag_verbouw:      v += 5; bd.append("verbouwkans (+5)")
     if l.flag_ontwikkeling: v += 4; bd.append("ontwikkelkans (+4)")
     if l.flag_dakopbouw:    v += 4; bd.append("dakopbouw/optoppen (+4)")
+    if l.flag_vliering:     v += 4; bd.append("vliering/bergzolder genoemd (+4)")
     if l.flag_uitbreiden:   v += 3; bd.append("uitbreiden (+3)")
     pts += min(v, 20)
+
+    # Onbenutte inpandige ruimte = de vliering/berging waar een heel
+    # appartement uit kan. Dit telt apart en zwaar: het voegt oppervlak TOE,
+    # terwijl splitsen bestaand oppervlak alleen verdeelt.
+    oi = l.overige_inpandig or 0
+    if oi >= 60:
+        pts += 20; bd.append(f"onbenutte ruimte {oi:.0f} m² (+20)")
+    elif oi >= 35:
+        pts += 14; bd.append(f"onbenutte ruimte {oi:.0f} m² (+14)")
+    elif oi >= 20:
+        pts += 8; bd.append(f"onbenutte ruimte {oi:.0f} m² (+8)")
+    # Tweede spoor: veel inhoud t.o.v. woonoppervlak betekent hoogte die
+    # nergens als woonruimte meetelt — meestal precies die kap.
+    elif l.inhoud_m3 and l.living_area and l.living_area > 0:
+        verhouding = l.inhoud_m3 / l.living_area
+        if verhouding >= 4.2:
+            pts += 10; bd.append(f"veel inhoud ({verhouding:.1f} m³/m²): onbenutte hoogte (+10)")
+        elif verhouding >= 3.6:
+            pts += 5; bd.append(f"ruime inhoud ({verhouding:.1f} m³/m²) (+5)")
 
     # Groot perceel bij een volwaardige woning = bijbouw-/uitbouwpotentie
     # (vergunningvrij bouwen schaalt mee met het bebouwingsgebied).

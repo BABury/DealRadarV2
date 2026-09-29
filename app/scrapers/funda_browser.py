@@ -98,6 +98,17 @@ def _m2(text: str) -> float | None:
         return None
 
 
+def _m3(text: str) -> float | None:
+    """Inhoud in m³. Veel inhoud bij weinig woonoppervlak = onbenutte hoogte."""
+    m = re.search(r"([\d.]+)\s*m³", text or "")
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(".", ""))
+    except ValueError:
+        return None
+
+
 def _int(text: str) -> int | None:
     m = re.search(r"\d+", text or "")
     return int(m.group(0)) if m else None
@@ -112,6 +123,14 @@ def parse_detail(data: dict, url: str) -> dict | None:
         return None
 
     perceel = _m2(k.get("Perceel") or k.get("Oppervlakte") or "")
+    # Funda's blok 'Oppervlakten en inhoud' splitst uit. De vliering of
+    # bergzolder haalt de meetnorm voor 'wonen' niet (te lage kap) en landt
+    # daarom in 'overige inpandige ruimte'. Dat is exact de ruimte waar een
+    # extra appartement uit te halen valt, dus die willen we als getal.
+    overig = _m2(k.get("Overige inpandige ruimte") or "")
+    buiten = _m2(k.get("Gebouwgebonden buitenruimte") or "")
+    berging = _m2(k.get("Externe bergruimte") or "")
+    inhoud = _m3(k.get("Inhoud") or "")
     bouwjaar = _int(k.get("Bouwjaar") or "")
     if bouwjaar and not (1500 < bouwjaar < 2100):
         bouwjaar = None
@@ -137,6 +156,10 @@ def parse_detail(data: dict, url: str) -> dict | None:
         "price": prijs,
         "living_area": wonen,
         "plot_area": perceel,
+        "overige_inpandig": overig,
+        "gebouw_buitenruimte": buiten,
+        "externe_berging": berging,
+        "inhoud_m3": inhoud,
         "price_m2": round(prijs / wonen) if wonen else None,
         "property_type": (k.get("Soort woonhuis") or k.get("Soort appartement") or "")[:120],
         "build_year": bouwjaar,
@@ -523,11 +546,16 @@ def scrape_funda_browser(sink=None, on_total=None, steden: list[str] | None = No
     if on_total:
         on_total(len(cities))
 
+    from .stop import stop_gevraagd
+
     alles: list[dict] = []
     geblokkeerd_op_rij = 0
     gebruikt = 0
     with Browser() as br:
         for n_stad, city in enumerate(cities):
+            if stop_gevraagd():
+                print(f"[funda-browser] stop gevraagd — {city} en de rest overgeslagen", flush=True)
+                break
             if geblokkeerd_op_rij >= 2 or gebruikt >= budget:
                 reden = ("Funda blokkeert dit IP" if geblokkeerd_op_rij >= 2
                          else f"paginabudget ({budget}) op")
@@ -548,7 +576,7 @@ def scrape_funda_browser(sink=None, on_total=None, steden: list[str] | None = No
                 # ── trap 1: zoekpagina's (15 huizen per pagina) ──
                 zoek_budget = max(1, stad_budget - max_details)
                 for p in range(1, max_pages + 1):
-                    if pagina >= zoek_budget or time.time() > deadline:
+                    if pagina >= zoek_budget or time.time() > deadline or stop_gevraagd():
                         break
                     _, data = br.open(search_url(city, max_price, p), evaluate=CARDS_JS)
                     pagina += 1
@@ -579,7 +607,7 @@ def scrape_funda_browser(sink=None, on_total=None, steden: list[str] | None = No
                 kandidaten.sort(key=lambda k: k.get("price_m2") or 10 ** 9)
                 ruimte = max(0, min(max_details, stad_budget - pagina))
                 for k in kandidaten[:ruimte]:
-                    if time.time() > deadline or status == "blocked":
+                    if time.time() > deadline or status == "blocked" or stop_gevraagd():
                         break
                     _, det = br.open(k["url"], evaluate=DETAIL_JS)
                     pagina += 1

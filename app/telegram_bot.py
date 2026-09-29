@@ -95,6 +95,18 @@ HULP = ("<b>DealRadar-team</b>\n"
         "📊 <b>/status</b> — wat het team doet en wat het vandaag kostte\n"
         "⏹ <b>/stop</b> — stop wat het team nu doet\n"
         "⏸ <b>/uit</b> · <b>/aan</b> — hoofdschakelaar\n\n"
+        "<b>Scrapen op afstand</b>\n"
+        "🏠 <b>/scrape</b> — Funda afzoeken in je focussteden\n"
+        "🏠 <b>/scrape amsterdam</b> · <b>/scrape amsterdam,rotterdam 140</b> — precies deze steden "
+        "(het getal is het paginabudget; boven ±200 per half uur gaat Funda blokkeren)\n"
+        "⏹ <b>/scrapestop</b> — stop de lopende scrape\n\n"
+        "<b>Kansen bekijken</b>\n"
+        "🔺 <b>/kansen</b> — de tien hoogste scores\n"
+        "🏚 <b>/vliering</b> — panden met onbenutte ruimte boven (bergzolder, vliering)\n\n"
+        "<b>Knoppen omzetten</b>\n"
+        "⚙️ <b>/instellingen</b> — alles wat je kunt bijstellen\n"
+        "⚙️ <b>/zet</b> vliering_min_m2 25 — één waarde wijzigen\n"
+        "🏙 <b>/steden</b> amsterdam,rotterdam,eindhoven — waar we op focussen\n\n"
         "Onder elke dealmelding staat ook een knop om die deal te laten uitzoeken.")
 
 
@@ -137,6 +149,105 @@ def zoek(term: str) -> list[dict]:
                  "m2": r.living_area} for r in rijen]
 
 
+def top_kansen(alleen_vliering: bool = False, n: int = 10) -> list[dict]:
+    """De beste objecten in je focussteden, voor onderweg op je telefoon."""
+    from sqlalchemy import desc, or_
+
+    from .agents.instellingen import focus_varianten, lees
+    from .db import Listing, SessionLocal
+    from sqlalchemy import func as _f
+    with SessionLocal() as s:
+        q = (s.query(Listing).filter(Listing.is_demo.is_(False))
+             .filter(_f.lower(_f.trim(Listing.city)).in_(sorted(focus_varianten()))))
+        if alleen_vliering:
+            drempel = lees()["vliering_min_m2"]
+            q = q.filter(or_(Listing.overige_inpandig >= drempel,
+                             Listing.flag_vliering.is_(True)))
+            q = q.order_by(desc(Listing.overige_inpandig), desc(Listing.flip_score))
+        else:
+            q = q.order_by(desc(Listing.flip_score))
+        return [r.to_dict() for r in q.limit(n).all()]
+
+
+def kansen_tekst(rijen: list[dict], titel: str) -> tuple[str, list]:
+    """Tekst + knoppen, zodat je vanuit de lijst meteen kunt laten uitzoeken."""
+    if not rijen:
+        return (f"<b>{titel}</b>\nNog niets gevonden. Draai eerst /scrape.", [])
+    regels = [f"<b>{titel}</b>"]
+    knoppen = []
+    for r in rijen:
+        v = r.get("vliering") or {}
+        extra = ""
+        if r.get("overige_inpandig"):
+            extra = f" · <b>{r['overige_inpandig']:.0f} m² onbenut</b>"
+        if v.get("netto"):
+            extra += f" → ca. {_eur(v['netto'])} netto"
+        regels.append(f"\n{r.get('flip_score', 0)} · <b>{_e(r.get('address'))}</b>, "
+                      f"{_e(r.get('city'))}\n{_eur(r.get('price'))} · "
+                      f"{(r.get('living_area') or 0):.0f} m²{extra}")
+        knoppen.append([{"text": f"🔍 {r.get('address')}"[:60],
+                         "callback_data": f"onderzoek:{r.get('id')}"}])
+    return ("\n".join(regels), knoppen[:8])
+
+
+def instellingen_tekst() -> str:
+    from .agents.instellingen import GRENZEN, lees
+    ins = lees()
+    regels = ["<b>Instellingen</b>", "Wijzigen met <code>/zet sleutel waarde</code>\n"]
+    for k, v in ins.items():
+        if isinstance(v, list):
+            v = ", ".join(v)
+        grens = GRENZEN.get(k)
+        achter = f"  <i>({grens[0]}–{grens[1]})</i>" if grens else ""
+        regels.append(f"<code>{k}</code> = <b>{_e(v)}</b>{achter}")
+    return "\n".join(regels)
+
+
+def zet_instelling(rest: str) -> str:
+    """/zet sleutel waarde — één waarde bijstellen, altijd binnen de grenzen."""
+    from .agents.instellingen import GRENZEN, STANDAARD, lees, opslaan
+    deel = (rest or "").replace("=", " ").split()
+    if len(deel) < 2:
+        return ("Gebruik: <code>/zet sleutel waarde</code>, bijvoorbeeld "
+                "<code>/zet vliering_min_m2 25</code>. Stuur /instellingen voor de lijst.")
+    sleutel, waarde = deel[0].strip().lower(), " ".join(deel[1:]).strip()
+    if sleutel not in STANDAARD:
+        return f"<code>{_e(sleutel)}</code> ken ik niet. Stuur /instellingen voor de lijst."
+    if sleutel == "steden":
+        return zet_steden(waarde)
+    std = STANDAARD[sleutel]
+    try:
+        if isinstance(std, bool):
+            nieuw = waarde.lower() in ("1", "aan", "true", "ja", "on")
+        elif isinstance(std, float):
+            nieuw = float(waarde.replace(",", "."))
+        elif isinstance(std, int):
+            nieuw = int(float(waarde.replace(",", ".")))
+        else:
+            nieuw = waarde
+    except ValueError:
+        return f"<b>{_e(waarde)}</b> is geen geldige waarde voor <code>{_e(sleutel)}</code>."
+    opslaan({sleutel: nieuw})
+    na = lees()[sleutel]
+    grens = GRENZEN.get(sleutel)
+    if grens and na != nieuw:
+        return (f"✅ <code>{_e(sleutel)}</code> staat nu op <b>{_e(na)}</b> "
+                f"(begrensd op {grens[0]}–{grens[1]}).")
+    return f"✅ <code>{_e(sleutel)}</code> staat nu op <b>{_e(na)}</b>."
+
+
+def zet_steden(rest: str) -> str:
+    from .agents.instellingen import lees, opslaan, stad
+    steden = [stad(x) for x in (rest or "").replace(";", ",").split(",") if x.strip()]
+    if not steden:
+        return ("Gebruik: <code>/steden amsterdam,rotterdam,eindhoven</code>.\n"
+                f"Nu: <b>{', '.join(lees()['steden'])}</b>")
+    opslaan({"steden": steden})
+    nu = lees()["steden"]
+    return (f"✅ Focus staat nu op <b>{', '.join(nu)}</b>.\n"
+            "Dat geldt meteen voor de scraper, de lijst, de meldingen en het team.")
+
+
 def rapport_tekst(r: dict) -> str:
     """Het resultaat van een onderzoek, compact voor Telegram."""
     if r.get("status") == "al bezig":
@@ -175,7 +286,7 @@ def rapport_tekst(r: dict) -> str:
     return "\n".join(regels)
 
 
-def verwerk(update: dict, start_onderzoek, start_ronde) -> None:
+def verwerk(update: dict, start_onderzoek, start_ronde, start_scrape=None) -> None:
     """Eén bericht of knopdruk van Telegram. Werk dat lang duurt gaat naar een
     achtergrondthread; Telegram krijgt meteen antwoord."""
     cb = update.get("callback_query")
@@ -225,6 +336,81 @@ def verwerk(update: dict, start_onderzoek, start_ronde) -> None:
         stuur("✅ Team staat <b>aan</b> — het werkt op jouw opdracht." if aan else
               "⏸ Team staat <b>uit</b>. Niets kan het nog starten tot je /aan stuurt.")
         return
+    # ── scrapen op afstand ──
+    if laag.startswith("/scrapestop"):
+        from .scrapers.stop import stop_aanvragen
+        stop_aanvragen()
+        stuur("⏹ Stop gegeven. De pagina die onderweg is wordt afgemaakt, daarna stopt de scrape.")
+        return
+    if laag.startswith("/scrape"):
+        if start_scrape is None:
+            stuur("Scrapen via Telegram is in deze versie nog niet beschikbaar.")
+            return
+        rest = tekst[len("/scrape"):].strip()
+        budget, steden = 0, []
+        for stuk in rest.replace(";", ",").replace(" ", ",").split(","):
+            stuk = stuk.strip()
+            if not stuk:
+                continue
+            if stuk.isdigit():
+                budget = int(stuk)
+            else:
+                from .agents.instellingen import stad
+                steden.append(stad(stuk))
+        from .agents.instellingen import lees
+        doel = steden or lees()["steden"]
+        stuur(f"🏠 Ik zet Funda aan het werk voor <b>{', '.join(doel)}</b>"
+              + (f" met een budget van {budget} pagina's" if budget else "")
+              + ".\nDit duurt een paar minuten per stad. Stop kan met /scrapestop.")
+        threading.Thread(target=start_scrape, args=(steden or None, budget or None),
+                         daemon=True).start()
+        return
+
+    # ── kansen bekijken ──
+    if laag.startswith("/vliering") or laag.startswith("/kansen"):
+        alleen_vliering = laag.startswith("/vliering")
+        titel = ("Onbenutte ruimte boven" if alleen_vliering else "Hoogste scores")
+        try:
+            rijen = top_kansen(alleen_vliering)
+        except Exception as e:
+            stuur(f"Kon de lijst niet ophalen: {_e(str(e)[:120])}")
+            return
+        tekst_uit, knoppen = kansen_tekst(rijen, titel)
+        stuur(tekst_uit, knoppen=knoppen or None)
+        return
+
+    # ── knoppen omzetten ──
+    if laag.startswith("/herlees"):
+        from .keywords import analyse_description
+        from .db import Listing, SessionLocal
+        n, bij = 0, 0
+        with SessionLocal() as sess:
+            for r in sess.query(Listing).filter(Listing.omschrijving.isnot(None),
+                                                Listing.omschrijving != "").all():
+                n += 1
+                an = analyse_description(r.omschrijving or "")
+                if any(k.startswith("flag_") and hasattr(r, k) and getattr(r, k) != v
+                       for k, v in an.items()):
+                    for k, v in an.items():
+                        if k.startswith("flag_") and hasattr(r, k):
+                            setattr(r, k, v)
+                    bij += 1
+            sess.commit()
+        from .scoring import compute_scores
+        compute_scores()
+        stuur(f"🔁 {n} omschrijvingen opnieuw gelezen, <b>{bij}</b> bijgewerkt. "
+              "Stuur /vliering voor het resultaat.")
+        return
+    if laag.startswith("/instellingen"):
+        stuur(instellingen_tekst())
+        return
+    if laag.startswith("/zet"):
+        stuur(zet_instelling(tekst[len("/zet"):].strip()))
+        return
+    if laag.startswith("/steden"):
+        stuur(zet_steden(tekst[len("/steden"):].strip()))
+        return
+
     if laag.startswith("/ronde"):
         from .agents import hoofdschakelaar_aan
         if not hoofdschakelaar_aan():

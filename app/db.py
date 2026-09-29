@@ -58,6 +58,13 @@ class Listing(Base):
     price: Mapped[float] = mapped_column(Float, nullable=True)
     living_area: Mapped[float] = mapped_column(Float, nullable=True)
     plot_area: Mapped[float] = mapped_column(Float, nullable=True)
+    # Funda splitst de oppervlakten uit. De vliering/bergzolder telt niet als
+    # 'wonen' (te lage kap), maar staat wél in 'overige inpandige ruimte' —
+    # precies de ruimte waar een extra appartement uit te halen valt.
+    overige_inpandig: Mapped[float] = mapped_column(Float, nullable=True)
+    gebouw_buitenruimte: Mapped[float] = mapped_column(Float, nullable=True)
+    externe_berging: Mapped[float] = mapped_column(Float, nullable=True)
+    inhoud_m3: Mapped[float] = mapped_column(Float, nullable=True)
     price_m2: Mapped[float] = mapped_column(Float, nullable=True)
     property_type: Mapped[str] = mapped_column(String(120), default="")
     build_year: Mapped[int] = mapped_column(Integer, nullable=True)
@@ -77,6 +84,7 @@ class Listing(Base):
     flag_splits_kadastraal: Mapped[bool] = mapped_column(Boolean, default=False)
     flag_splitsvergunning: Mapped[bool] = mapped_column(Boolean, default=False)
     flag_verhuurd: Mapped[bool] = mapped_column(Boolean, default=False)
+    flag_vliering: Mapped[bool] = mapped_column(Boolean, default=False)
     context: Mapped[str] = mapped_column(Text, default="")
     # Volledige omschrijving van de detailpagina (context = alleen snippers
     # rond trefwoorden). Niet in to_dict(): te groot voor de lijst van 1000.
@@ -126,6 +134,10 @@ class Listing(Base):
             "price": self.price,
             "living_area": self.living_area,
             "plot_area": self.plot_area,
+            "overige_inpandig": self.overige_inpandig,
+            "gebouw_buitenruimte": self.gebouw_buitenruimte,
+            "externe_berging": self.externe_berging,
+            "inhoud_m3": self.inhoud_m3,
             "price_m2": self.price_m2,
             "property_type": self.property_type,
             "build_year": self.build_year,
@@ -145,6 +157,7 @@ class Listing(Base):
                 "splits_kadastraal": self.flag_splits_kadastraal,
                 "splitsvergunning": self.flag_splitsvergunning,
                 "verhuurd": self.flag_verhuurd,
+                "vliering": self.flag_vliering,
             },
             "context": self.context,
             "heeft_omschrijving": bool((self.omschrijving or "").strip()),
@@ -186,6 +199,13 @@ class SoldListing(Base):
     price: Mapped[float] = mapped_column(Float, nullable=True)
     living_area: Mapped[float] = mapped_column(Float, nullable=True)
     plot_area: Mapped[float] = mapped_column(Float, nullable=True)
+    # Funda splitst de oppervlakten uit. De vliering/bergzolder telt niet als
+    # 'wonen' (te lage kap), maar staat wél in 'overige inpandige ruimte' —
+    # precies de ruimte waar een extra appartement uit te halen valt.
+    overige_inpandig: Mapped[float] = mapped_column(Float, nullable=True)
+    gebouw_buitenruimte: Mapped[float] = mapped_column(Float, nullable=True)
+    externe_berging: Mapped[float] = mapped_column(Float, nullable=True)
+    inhoud_m3: Mapped[float] = mapped_column(Float, nullable=True)
     price_m2: Mapped[float] = mapped_column(Float, nullable=True)
     property_type: Mapped[str] = mapped_column(String(120), default="")
     publication_date: Mapped[str] = mapped_column(String(40), default="")
@@ -429,7 +449,12 @@ def init_db() -> None:
                             "ai_bevinding": "TEXT",
                             "ai_advies": "VARCHAR(20) DEFAULT ''",
                             "ai_checked": "TIMESTAMP",
-                            "omschrijving": "TEXT"}.items():
+                            "omschrijving": "TEXT",
+                            "overige_inpandig": "FLOAT",
+                            "gebouw_buitenruimte": "FLOAT",
+                            "externe_berging": "FLOAT",
+                            "inhoud_m3": "FLOAT",
+                            "flag_vliering": "BOOLEAN DEFAULT FALSE"}.items():
             if _name not in existing:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE listings ADD COLUMN {_name} {_ddl}"))

@@ -50,6 +50,12 @@ STANDAARD = {
     # Hoeveel focussteden per run; de rest komt de volgende run (om en om).
     # Funda blokkeert op tempo (±200 pagina's per half uur), niet op IP.
     "funda_steden_per_run": 2,
+    # Vliering-strategie: onbenutte inpandige ruimte (bergzolder, vliering)
+    # omzetten in een compleet extra appartement. Vanaf hoeveel m² de moeite
+    # waard, en wat de verbouwing per m² kost.
+    "vliering_min_m2": 20.0,
+    "vliering_verbouw_eur_m2": 1800.0,
+    "vliering_vaste_kosten": 25000.0,   # vergunning, constructeur, VvE-akkoord, akte
     # Kees (Criticus)
     "kees_aan": True,
     "kees_top_n": 3,                # per soort (koop en veiling)
@@ -67,6 +73,9 @@ GRENZEN = {
     "kees_top_n": (0, 15),
     "funda_details_per_stad": (0, 60),
     "funda_steden_per_run": (1, 12),
+    "vliering_min_m2": (5.0, 200.0),
+    "vliering_verbouw_eur_m2": (500.0, 5000.0),
+    "vliering_vaste_kosten": (0.0, 250000.0),
 }
 
 # Gemeten in de eerste echte ronde (18 sept 2026); alleen voor de schatting.
