@@ -78,7 +78,7 @@ GRENZEN = {
     "rik_zoekopdrachten": (1, 15),
     "rik_geldig_dagen": (7, 365),
     "kees_top_n": (0, 15),
-    "funda_details_per_stad": (0, 60),
+    "funda_details_per_stad": (0, 200),
     "funda_steden_per_run": (1, 12),
     "funda_min_m2": (0, 1000),
     "vliering_min_m2": (5.0, 200.0),
