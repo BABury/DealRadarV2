@@ -12,6 +12,7 @@ Score (max 100):
   bouwjaar (voor 1970)             0-10
   geen erfpacht                    5
   splitsbaar                       0-15
+  gemengd pand (profiel De Pijp)   0-24
   prijsverlaging gezien            0-10
   veiling (gemotiveerde verkoop)   8
 """
@@ -61,6 +62,11 @@ def score_listing(l: Listing, bm: BenchmarkMap) -> tuple[int, list[str], dict]:
             if disc <= -15:
                 bd.append(f"prijs/m² +{-disc:.0f}% BOVEN {label}")
 
+    # Waarschuwing bij de korting: bestaat het metrage voor een flink deel uit
+    # ruimte die niet als woning verkoopt, dan is prijs/m² misleidend laag.
+    if l.flag_lage_ruimte and l.living_area and (l.overige_inpandig or 0) >= 0.2 * l.living_area:
+        bd.append("⚠ veel berging/souterrain in het metrage — prijs/m² lijkt lager dan hij is")
+
     label_pts = {"G": 15, "F": 12, "E": 9, "D": 5, "C": 2}
     el = (l.energy_label or "").upper().strip()
     if el in label_pts:
@@ -82,16 +88,37 @@ def score_listing(l: Listing, bm: BenchmarkMap) -> tuple[int, list[str], dict]:
     if l.flag_uitbreiden:   v += 3; bd.append("uitbreiden (+3)")
     pts += min(v, 20)
 
+    # ── Gemengd pand ──────────────────────────────────────────────────────
+    # Een heel pand waarin al woningen zitten, met bedrijfsruimte eronder.
+    # Dit telt apart en zwaar, omdat het de vergunningsroute bepaalt: de
+    # bestaande woningen hoeven niet gevormd te worden en de bedrijfsruimte
+    # wordt een woning via functiewijziging. In Amsterdam ontloop je daarmee
+    # de eis dat nieuw gevormde woningen gemiddeld 100 m² moeten zijn.
+    g = 0
+    if l.flag_geheel_pand:       g += 6;  bd.append("geheel pand (+6)")
+    if l.flag_gemengd_bg:        g += 10; bd.append("bedrijfsruimte op begane grond — functiewijziging i.p.v. woningvorming (+10)")
+    if l.flag_meerdere_woningen: g += 8;  bd.append("meerdere bestaande woningen in het pand (+8)")
+    if l.flag_leeg_opgeleverd:   g += 5;  bd.append("leeg opgeleverd (+5)")
+    if g:
+        pts += min(g, 24)
+        if l.flag_gemengd_bg and l.flag_meerdere_woningen:
+            bd.append("↳ check de BAG op gebruiksdoel per verblijfsobject")
+
     # Onbenutte inpandige ruimte = de vliering/berging waar een heel
     # appartement uit kan. Dit telt apart en zwaar: het voegt oppervlak TOE,
     # terwijl splitsen bestaand oppervlak alleen verdeelt.
     oi = l.overige_inpandig or 0
+    # Rem: noemt de tekst een souterrain of beperkte stahoogte, dan is een
+    # deel van die meters berging die nooit voor woonprijzen verkoopt. In De
+    # Pijp was dat 79 van de 273,7 m²; vol meetellen maakte het pand ruim twee
+    # ton mooier dan het was. Halve punten, en het staat in de onderbouwing.
+    demping = 0.5 if l.flag_lage_ruimte else 1.0
     if oi >= 60:
-        pts += 20; bd.append(f"onbenutte ruimte {oi:.0f} m² (+20)")
+        p = int(20 * demping); pts += p; bd.append(f"onbenutte ruimte {oi:.0f} m² (+{p})")
     elif oi >= 35:
-        pts += 14; bd.append(f"onbenutte ruimte {oi:.0f} m² (+14)")
+        p = int(14 * demping); pts += p; bd.append(f"onbenutte ruimte {oi:.0f} m² (+{p})")
     elif oi >= 20:
-        pts += 8; bd.append(f"onbenutte ruimte {oi:.0f} m² (+8)")
+        p = int(8 * demping); pts += p; bd.append(f"onbenutte ruimte {oi:.0f} m² (+{p})")
     # Tweede spoor: veel inhoud t.o.v. woonoppervlak betekent hoogte die
     # nergens als woonruimte meetelt — meestal precies die kap.
     elif l.inhoud_m3 and l.living_area and l.living_area > 0:

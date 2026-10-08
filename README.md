@@ -120,3 +120,51 @@ met een getrapte fallback: wijk-verkocht → stad-verkocht → stad-actief.
 **Railway:** verwijder de env-var `FUNDA_MAX_PER_CITY` (of zet hem hoog) zodat
 alle objecten per gemeente meegenomen worden — de code-default is nu onbeperkt.
 Bestaande database migreert automatisch (nieuwe kolommen + tabellen bij start).
+
+## Update oktober 2026 — profiel "gemengd pand"
+
+**Aanleiding.** Tweede Jacob van Campenstraat 141 in De Pijp: een geheel pand van
+273,7 m² met twee bestaande woningen erin, bedrijfsruimte op de begane grond en
+een bergzolder. Precies het profiel waar de meeste waarde in zit — en FlipRadar
+liet hem niet zien.
+
+**De bug.** `property_filter.is_residential()` haalde de uitsluitlijst
+(`bedrijfsruimte`, `magazijn`, `winkelruimte`...) over de VOLLEDIGE tekst, dus ook
+over de omschrijving. Een eengezinswoning waarvan de omschrijving een
+bedrijfsruimte noemt viel daardoor af, tenzij er toevallig ook een zin over
+woonbestemming in stond. Het objecttype beslist nu eerst: zegt het type "woning",
+dan blijft het object staan, wat er verder ook in de tekst staat.
+
+**Waarom dit profiel telt.** Drie soorten ruimte, drie verschillende
+vergunningsroutes:
+
+| Wat je doet | Route | Toets |
+|---|---|---|
+| Bestaande woningen laten staan | geen | n.v.t. |
+| Bedrijfsruimte → woning | functiewijziging | géén woningvorming |
+| Zolder/bergvliering → woning | externe ruimte | alleen 18 m² minimum |
+| Eén woning opdelen | woningvorming | oorspronkelijk ≥200 m² én nieuw gemiddeld ≥100 m² |
+
+Alleen die laatste regel is de lastige. Zit een pand al vol zelfstandige
+woningen met bedrijfsruimte eronder, dan kom je er nooit aan toe.
+
+**Nieuw:**
+- Vijf vlaggen in `keywords.py`: `flag_geheel_pand`, `flag_gemengd_bg`,
+  `flag_meerdere_woningen`, `flag_leeg_opgeleverd` en als rem `flag_lage_ruimte`.
+- Scoring: gemengd-pand-stapel van maximaal +24 punten, met een regel in de
+  onderbouwing die zegt dat je de BAG op gebruiksdoel moet checken.
+- `split.py`: een zolder van ≥18 m² `overige_inpandig` telt als extra woning
+  (externe ruimte). De bedrijfsruimte telt NIET als extra meters — die zit op
+  Funda al in de gebruiksoppervlakte — maar verhoogt wel de zekerheid.
+- Instellingen: `gemengd_pand_aan`, `gemengd_pand_min_m2`, `externe_ruimte_min_m2`.
+
+**De rem.** `flag_lage_ruimte` halveert de punten voor onbenutte ruimte en zet een
+waarschuwing bij de prijs/m². In De Pijp waren 79 van de 273,7 m² souterrain van
+1,94 m hoog en zolder onder de kap. Die vulden het metrage waarover de vraagprijs
+per m² werd gerekend (€4.911 tegenover een buurtgemiddelde van €9.481) en maakten
+het pand ruim twee ton mooier dan het was. Controleer bij elk pand met souterrain
+of zolder altijd eerst de stahoogte op de plattegrond.
+
+**Database migreert automatisch** bij de eerstvolgende start (vijf nieuwe
+`flag_`-kolommen). Daarna één keer `POST /api/rescore` om de bestaande objecten
+opnieuw te scoren.

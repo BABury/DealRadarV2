@@ -63,6 +63,16 @@ STANDAARD = {
     "vliering_min_m2": 20.0,
     "vliering_verbouw_eur_m2": 1800.0,
     "vliering_vaste_kosten": 25000.0,   # vergunning, constructeur, VvE-akkoord, akte
+    # Profiel 'gemengd pand' (De Pijp, okt 2026): heel pand met bedrijfsruimte
+    # op de begane grond en één of meer bestaande woningen erboven. De
+    # bestaande woningen hoeven niet gevormd te worden en de bedrijfsruimte
+    # wordt een woning via functiewijziging — daarmee valt het buiten de
+    # gemiddelde-oppervlakte-eis die bij woningvorming geldt.
+    "gemengd_pand_aan": True,
+    "gemengd_pand_min_m2": 150,          # onder de 150 m² blijft er te weinig over
+    # Ondergrens voor een woning uit een zolder/bergvliering ('externe
+    # ruimte'); in Amsterdam 18 m², zonder gemiddelde-eis.
+    "externe_ruimte_min_m2": 18.0,
     # Kees (Criticus)
     "kees_aan": True,
     "kees_top_n": 3,                # per soort (koop en veiling)
@@ -84,6 +94,8 @@ GRENZEN = {
     "vliering_min_m2": (5.0, 200.0),
     "vliering_verbouw_eur_m2": (500.0, 5000.0),
     "vliering_vaste_kosten": (0.0, 250000.0),
+    "gemengd_pand_min_m2": (0, 2000),
+    "externe_ruimte_min_m2": (10.0, 100.0),
 }
 
 # Gemeten in de eerste echte ronde (18 sept 2026); alleen voor de schatting.

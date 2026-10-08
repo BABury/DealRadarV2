@@ -85,6 +85,14 @@ class Listing(Base):
     flag_splitsvergunning: Mapped[bool] = mapped_column(Boolean, default=False)
     flag_verhuurd: Mapped[bool] = mapped_column(Boolean, default=False)
     flag_vliering: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Profiel 'gemengd pand': heel pand, bestaande woningen, bedrijfsruimte
+    # op de begane grond, leeg opgeleverd. Zie keywords.py voor het waarom.
+    flag_geheel_pand: Mapped[bool] = mapped_column(Boolean, default=False)
+    flag_gemengd_bg: Mapped[bool] = mapped_column(Boolean, default=False)
+    flag_meerdere_woningen: Mapped[bool] = mapped_column(Boolean, default=False)
+    flag_leeg_opgeleverd: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Rem: metrage dat niet als woonruimte verkoopt (souterrain, lage kap).
+    flag_lage_ruimte: Mapped[bool] = mapped_column(Boolean, default=False)
     context: Mapped[str] = mapped_column(Text, default="")
     # Volledige omschrijving van de detailpagina (context = alleen snippers
     # rond trefwoorden). Niet in to_dict(): te groot voor de lijst van 1000.
@@ -158,6 +166,11 @@ class Listing(Base):
                 "splitsvergunning": self.flag_splitsvergunning,
                 "verhuurd": self.flag_verhuurd,
                 "vliering": self.flag_vliering,
+                "geheel_pand": self.flag_geheel_pand,
+                "gemengd_bg": self.flag_gemengd_bg,
+                "meerdere_woningen": self.flag_meerdere_woningen,
+                "leeg_opgeleverd": self.flag_leeg_opgeleverd,
+                "lage_ruimte": self.flag_lage_ruimte,
             },
             "context": self.context,
             "heeft_omschrijving": bool((self.omschrijving or "").strip()),
@@ -454,7 +467,12 @@ def init_db() -> None:
                             "gebouw_buitenruimte": "FLOAT",
                             "externe_berging": "FLOAT",
                             "inhoud_m3": "FLOAT",
-                            "flag_vliering": "BOOLEAN DEFAULT FALSE"}.items():
+                            "flag_vliering": "BOOLEAN DEFAULT FALSE",
+                            "flag_geheel_pand": "BOOLEAN DEFAULT FALSE",
+                            "flag_gemengd_bg": "BOOLEAN DEFAULT FALSE",
+                            "flag_meerdere_woningen": "BOOLEAN DEFAULT FALSE",
+                            "flag_leeg_opgeleverd": "BOOLEAN DEFAULT FALSE",
+                            "flag_lage_ruimte": "BOOLEAN DEFAULT FALSE"}.items():
             if _name not in existing:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE listings ADD COLUMN {_name} {_ddl}"))

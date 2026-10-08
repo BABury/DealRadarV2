@@ -32,6 +32,9 @@ KANSRIJK = [
     "vrijstaand", "bovenwoning", "winkel met bovenwoning", "pastorie",
     "transformatieobject", "voormalig politiebureau", "voormalige school",
     "kerk", "klooster", "kantoor", "praktijk",
+    # Het gemengde pand: heel pand met bedrijfsruimte onder en woningen boven.
+    "geheel pand", "gehele pand", "woon-winkelpand", "woonwinkelpand",
+    "beleggingspand", "gemengd pand",
 ]
 
 # Tekst die zegt dat splitsen al (deels) geregeld of voorzien is.
@@ -43,6 +46,11 @@ GENOEMD = [
 ]
 
 ZEKERHEID = {"vergunning": 1.0, "genoemd": 0.93, "potentieel": 0.85, "nee": 0.0}
+
+# Amsterdamse ondergrens voor een woning uit een 'externe ruimte' (zolder,
+# bergvliering). Die categorie kent geen gemiddelde-oppervlakte-eis, alleen
+# dit minimum — vandaar dat zo'n zolder vaak een eigen woning kan worden.
+EXTERNE_RUIMTE_MIN_M2 = 18.0
 
 
 def _flags(listing: dict) -> dict:
@@ -137,9 +145,31 @@ def analyse(listing: dict, min_app_m2: float = 50, verkeer_pct: float = 10) -> d
                 "reden": (f"{area:.0f} m² is te klein voor 2× {min_app_m2:.0f} m²"
                           if area else "woonoppervlak onbekend")}
 
+    # Bedrijfsruimte op de begane grond levert een woning op die níét uit
+    # woningvorming komt maar uit functiewijziging. Die telt dus bovenop wat
+    # er uit het woonoppervlak te halen valt, en valt buiten de gemiddelde-
+    # oppervlakte-eis die gemeenten bij woningvorming hanteren.
+    bonus_reden = []
+    # De bedrijfsruimte levert GEEN extra meters op: op Funda zit zij al in de
+    # opgegeven gebruiksoppervlakte. Haar waarde zit in de route — een woning
+    # via functiewijziging in plaats van woningvorming — en dus in de zekerheid
+    # dat de gemeente meewerkt, niet in het aantal eenheden.
+    functiewijziging = bool(fl.get("gemengd_bg") and fl.get("geheel_pand"))
+    if functiewijziging:
+        bonus_reden.append("bedrijfsruimte begane grond → woning via functiewijziging")
+
+    # De zolder/bergvliering telt wél extra: Funda zet 'overige inpandige
+    # ruimte' apart van 'wonen', dus deze meters zitten nog nergens in. Als
+    # 'externe ruimte' geldt alleen een minimum per woning, geen gemiddelde.
+    oi = float(listing.get("overige_inpandig") or 0)
+    if oi >= EXTERNE_RUIMTE_MIN_M2 and (fl.get("vliering") or fl.get("geheel_pand")):
+        units += 1
+        bonus_reden.append(f"zolder {oi:.0f} m² → +1 als externe ruimte")
+
     # Woonlagen: 3 lagen = natuurlijke splitsing per verdieping
     lagen = listing.get("floors")
     extra = []
+    extra.extend(bonus_reden)
     if kansrijk:
         extra.append("geschikt type")
     if lagen and int(lagen) >= 2:
@@ -155,6 +185,11 @@ def analyse(listing: dict, min_app_m2: float = 50, verkeer_pct: float = 10) -> d
     # Potentieel mét geschikt type is iets zekerder dan puur op oppervlak
     if status == "potentieel" and kansrijk:
         zeker = 0.9
+    # Zitten er al woningen in én is er bedrijfsruimte op de begane grond, dan
+    # hoeft er niets 'gevormd' te worden en valt het buiten de gemiddelde-
+    # oppervlakte-eis. Dat is de gunstigste route die er is.
+    if functiewijziging and fl.get("meerdere_woningen") and status != "vergunning":
+        zeker = min(0.95, round(zeker + 0.07, 3))
 
     # Gemeentebeleid is de laatste zeef. Een vergunning die er al ligt telt
     # vol; alles wat de gemeente nog moet goedkeuren zakt mee met het beleid.
