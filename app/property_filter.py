@@ -23,6 +23,9 @@ WONING = [
     "vrijstaand", "woonboerderij", "kluswoning", "portiekwoning",
     "maisonnette", "studio", "penthouse", "landhuis", "bungalow",
     "stadswoning", "grachtenpand", "woonruimte", "starterswoning",
+    # Gemengde panden: het type zegt al dat er gewoond wordt.
+    "woonwinkelpand", "woon-winkelpand", "winkel met bovenwoning",
+    "woonhuis met bedrijfsruimte", "geheel pand", "gehele pand",
 ]
 
 # Objecttypen die als transformatiekans gelden — dit staat in het TYPE zelf,
@@ -66,7 +69,14 @@ def residential_only() -> bool:
 
 
 def is_residential(item: dict) -> bool:
-    """True als dit een woning is, of een pand dat aantoonbaar wóning wordt."""
+    """True als dit een woning is, of een pand dat aantoonbaar wóning wordt.
+
+    De volgorde is belangrijk. Eerder werd de uitsluitlijst over de volledige
+    tekst gehaald — ook over de omschrijving. Een woonhuis waarvan de
+    omschrijving 'bedrijfsruimte' of 'magazijn' noemt viel daardoor af, terwijl
+    dat juist het gemengde pand is waar een extra woning in zit. Het type van
+    het object beslist nu eerst; pas als dat niets zegt kijken we naar de rest.
+    """
     soort = _norm(item.get("property_type"))
     tekst = _norm(item.get("property_type"), item.get("address"),
                   item.get("context"))
@@ -77,12 +87,21 @@ def is_residential(item: dict) -> bool:
     if any(t in soort for t in TRANSFORMATIE_TYPES):
         return True
 
-    # 2. Commercieel/grond: alleen houden als er expliciet naar WONEN wordt
-    #    verwezen (anders glipt 'herontwikkeling attractiepark' erdoor).
-    if any(u in tekst for u in UITSLUITEN):
+    # 2. Het TYPE zegt woning -> houden, wat er verder ook in de tekst staat.
+    #    Een eengezinswoning met een winkel op de begane grond is precies het
+    #    profiel waar je naar zoekt, geen reden om hem eruit te gooien.
+    if any(w in soort for w in WONING):
+        return True
+
+    # 3. Het TYPE is commercieel of grond -> alleen houden bij een expliciete
+    #    verwijzing naar wonen.
+    if any(u in soort for u in UITSLUITEN):
         return any(w in tekst for w in NAAR_WONEN)
 
-    # 3. Gewoon een woning
+    # 4. Geen bruikbaar type (komt voor bij veilingen): dan pas de oude zeef
+    #    over de volledige tekst.
+    if any(u in tekst for u in UITSLUITEN):
+        return any(w in tekst for w in NAAR_WONEN)
     return any(w in tekst for w in WONING)
 
 

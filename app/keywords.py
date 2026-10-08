@@ -35,6 +35,37 @@ KEYWORD_FLAGS = {
                      "handige klusser", "klushuis", "kluswoning", "eigen smaak",
                      "naar eigen inzicht", "moderniseren"],
     "flag_verhuurd": ["verhuurmogelijkheden", "verhuurd", "belegging", "huurinkomsten", "huurder"],
+    # ── Het gemengde pand (profiel De Pijp) ────────────────────────────────
+    # Een heel pand waarin al woningen zitten, met daaronder bedrijfsruimte.
+    # Dat is de gunstigste uitgangspositie die er is: de bestaande woningen
+    # hoeven niet 'gevormd' te worden, en de bedrijfsruimte wordt een woning
+    # via functiewijziging in plaats van woningvorming. Daarmee ontloop je in
+    # Amsterdam de eis dat nieuwe woningen gemiddeld 100 m² moeten zijn.
+    "flag_geheel_pand": ["geheel pand", "gehele pand", "het pand in zijn geheel",
+                         "gehele gebouw", "casco pand", "pand te koop",
+                         "woon-winkelpand", "woonwinkelpand", "beleggingspand",
+                         "winkel met bovenwoning", "winkel met bovenwoningen",
+                         "gemengd pand", "verzamelpand", "heel pand"],
+    # Niet-woonruimte op de begane grond = een woning erbij zonder woningvorming.
+    "flag_gemengd_bg": ["bedrijfsruimte op de begane grond", "winkelruimte op de begane grond",
+                        "bedrijfsruimte", "winkelruimte", "praktijkruimte",
+                        "kantoorruimte", "showroom", "atelier", "werkplaats",
+                        "bedrijfsmatige ruimte", "commerciële ruimte",
+                        "begane grond bedrijfsbestemming", "gemengde bestemming",
+                        "bestemming gemengd", "gemengd - 1", "gemengd-1"],
+    # Er zitten al meerdere zelfstandige woningen in — controleer dit altijd
+    # in de BAG, want de advertentie zegt niets over de formele status.
+    "flag_meerdere_woningen": ["twee appartementen", "2 appartementen", "drie appartementen",
+                               "3 appartementen", "vier appartementen", "4 appartementen",
+                               "twee woningen", "2 woningen", "drie woningen", "3 woningen",
+                               "meerdere zelfstandige", "meerdere woningen",
+                               "twee zelfstandige", "drie zelfstandige",
+                               "bovenwoningen", "twee bovenwoningen",
+                               "zijn er twee", "zijn er drie", "eigen opgang"],
+    # Leeg opgeleverd = direct verbouwen, geen huurders uit te kopen.
+    "flag_leeg_opgeleverd": ["leeg en ontruimd", "leeg opgeleverd", "leeg aanvaardbaar",
+                            "vrij van huur en gebruik", "vrij van huur",
+                            "leegstaand", "niet verhuurd", "vrij te aanvaarden"],
     # Onbenutte ruimte boven in het pand: de vliering/bergzolder die nu als
     # berging wordt gebruikt en waar een compleet appartement in past. Dit is
     # de duurste vierkante meter die je bijna gratis koopt.
@@ -57,6 +88,15 @@ KEYWORD_FLAGS = {
 # vliering middels de vlizotrap" is een kruipruimte; "vierde verdieping /
 # vliering boven de derde verdieping" is een appartement. Het verschil zit in
 # de zin eromheen, dus die wegen we mee.
+# Ruimte die in het metrage meetelt maar nooit voor woonprijzen verkoopt.
+# Les uit De Pijp: een souterrain van 1,94 m en een zolder onder de kap maakten
+# daar 79 van de 273,7 m², waardoor de vraagprijs per m² spotgoedkoop leek.
+LAGE_RUIMTE = ["beperkte stahoogte", "geen stahoogte", "lage stahoogte",
+               "stahoogte van 1", "stahoogte 1,", "beperkte hoogte",
+               "kruipruimte", "kruiphoogte", "niet als woonruimte",
+               "telt niet mee als woonoppervlak", "lage kap", "onder de kap",
+               "souterrain", "kelderruimte", "halfverdiepte"]
+
 VLIERING_ZWAK = ["vlizotrap", "vlizo", "kruipruimte", "bergkast", "bergingskast",
                  "kleine vliering", "kleine bergvliering", "praktische vliering",
                  "beperkte stahoogte", "geen stahoogte", "lage vliering",
@@ -134,6 +174,11 @@ def analyse_description(text: str) -> dict:
         if any(k in lower for k in kws):
             out["maintenance"] = label
             break
+
+    # Souterrain/zolder die wél in het metrage zit maar niet als woonruimte
+    # verkoopt. Dit dempt later de score, zodat een lage prijs per m² die
+    # alleen door bergingsmeters ontstaat niet als koopje wordt gelezen.
+    out["flag_lage_ruimte"] = any(w in lower for w in LAGE_RUIMTE)
 
     out["erfpacht"] = "erfpacht" in lower
     return out
